@@ -3,11 +3,11 @@ import io
 import time
 
 import altair as alt
+import matplotlib as mpl
 import numpy as np
 import pandas as pd
 import streamlit as st
 import tensorflow as tf
-from matplotlib import cm
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
@@ -159,7 +159,7 @@ def get_rf_base64(model, target_layer_idx, node_idx):
     max_abs = np.percentile(np.abs(eff_weights), 98) + 1e-12
     norm_w = np.clip(eff_weights / max_abs, -1.0, 1.0)
 
-    cmap = cm.get_cmap("RdBu")
+    cmap = mpl.colormaps["RdBu"]
     mapped_img = cmap((norm_w + 1) / 2)
     img = Image.fromarray((mapped_img * 255).astype(np.uint8))
     img = img.resize((84, 84), Image.Resampling.NEAREST)
@@ -181,7 +181,7 @@ def array_to_base64(arr):
         divisor = p_val if p_val > (max_raw * 0.001) else max_raw
         norm_arr = np.clip(arr / (divisor + 1e-30), -1.0, 1.0)
 
-    cmap = cm.get_cmap("RdBu")
+    cmap = mpl.colormaps["RdBu"]
     mapped_img = cmap((norm_arr + 1) / 2)
     img = Image.fromarray((mapped_img * 255).astype(np.uint8))
     img = img.resize((84, 84), Image.Resampling.NEAREST)

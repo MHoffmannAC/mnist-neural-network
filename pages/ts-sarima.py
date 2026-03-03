@@ -172,25 +172,26 @@ with st.sidebar:
         )
 
     diag_corr = st.checkbox("Correlation (ACF/PACF)", value=False)
+    diag_adf = st.checkbox("ADF (Stationarity Test)", value=False)
+
+    # Linked differencing order for diagnostics
+    diag_diff_order = 0
+    if diag_corr or diag_adf:
+        diag_diff_order = st.slider(
+            "Diagnostic Differencing Order",
+            0,
+            3,
+            0,
+            help="Difference the data for the diagnostic plots/test below to achieve stationarity.",
+        )
 
     if diag_corr:
         n_lags_to_show = st.slider(
             "Diagnostic Lags to Analyze",
             min_value=5,
             max_value=yearly_period * 4,
-            value=yearly_period * 2,
+            value=365 if current_freq == "D" else yearly_period * 2,
             help="Higher lags reveal longer-term seasonal cycles.",
-        )
-
-    diag_adf = st.checkbox("ADF (Stationarity Test)", value=False)
-
-    if diag_adf:
-        adf_diff_order = st.slider(
-            "Differencing Order for ADF Test",
-            0,
-            3,
-            0,
-            help="Check if first or second order differencing makes the series stationary.",
         )
 
     st.markdown("---")
@@ -435,6 +436,11 @@ if any([diag_decomp, diag_corr, diag_adf]):
     st.markdown("---")
     st.title("🔍 Model Diagnostics")
 
+    # Shared differencing for ACF/PACF and ADF calculations
+    diag_series = df_processed["y"].copy()
+    for _ in range(diag_diff_order):
+        diag_series = diag_series.diff().dropna()
+
     # 1. Decomposition
     if diag_decomp:
         st.subheader("1. Classical Decomposition")
@@ -491,10 +497,13 @@ if any([diag_decomp, diag_corr, diag_adf]):
     if diag_corr:
         st.markdown("<br>", unsafe_allow_html=True)
         st.subheader("2. Correlation Analysis (ACF & PACF)")
-        st.write(f"Displaying {n_lags_to_show} lags for {resample_freq} resolution.")
+        st.info(
+            f"Showing correlations for data with **d={diag_diff_order}** differencing.",
+        )
 
-        acf_vals = acf(df_processed["y"], nlags=n_lags_to_show)
-        pacf_vals = pacf(df_processed["y"], nlags=n_lags_to_show)
+        # Using diag_series which respects the Diagnostic Differencing Order
+        acf_vals = acf(diag_series, nlags=n_lags_to_show)
+        pacf_vals = pacf(diag_series, nlags=n_lags_to_show)
 
         corr_df = pd.DataFrame(
             {
@@ -504,7 +513,7 @@ if any([diag_decomp, diag_corr, diag_adf]):
             },
         )
 
-        conf_interval = 1.96 / np.sqrt(len(df_processed))
+        conf_interval = 1.96 / np.sqrt(len(diag_series))
         c1, c2 = st.columns(2)
 
         with c1:
@@ -552,12 +561,9 @@ if any([diag_decomp, diag_corr, diag_adf]):
         st.subheader("3. Stationarity Test (ADF)")
         st.write("Checking if the series mean and variance are constant over time.")
 
-        test_series = df_processed["y"].copy()
-        for _ in range(adf_diff_order):
-            test_series = test_series.diff().dropna()
-
         try:
-            adf_res = adfuller(test_series)
+            # Using diag_series which respects the Diagnostic Differencing Order
+            adf_res = adfuller(diag_series)
             adf_stat, p_val = adf_res[0], adf_res[1]
 
             stat_col, p_col, res_col = st.columns(3)
@@ -569,7 +575,7 @@ if any([diag_decomp, diag_corr, diag_adf]):
             else:
                 res_col.error("❌ Non-Stationary (Needs Differencing)")
 
-            st.caption(f"Testing series with differencing order: {adf_diff_order}")
+            st.caption(f"Testing series with differencing order: {diag_diff_order}")
         except Exception as e:
             st.error(f"Could not calculate ADF: {e}")
 

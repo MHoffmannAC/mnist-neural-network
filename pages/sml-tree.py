@@ -191,10 +191,22 @@ def get_split_lines(tree, node_id, x_min, x_max, y_min, y_max, lines):
         )
         # Recurse children with new boundaries
         get_split_lines(
-            tree, tree.children_left[node_id], x_min, threshold, y_min, y_max, lines,
+            tree,
+            tree.children_left[node_id],
+            x_min,
+            threshold,
+            y_min,
+            y_max,
+            lines,
         )
         get_split_lines(
-            tree, tree.children_right[node_id], threshold, x_max, y_min, y_max, lines,
+            tree,
+            tree.children_right[node_id],
+            threshold,
+            x_max,
+            y_min,
+            y_max,
+            lines,
         )
     else:  # Receiving Yards Split (Horizontal Line)
         lines.append(
@@ -208,10 +220,22 @@ def get_split_lines(tree, node_id, x_min, x_max, y_min, y_max, lines):
         )
         # Recurse children with new boundaries
         get_split_lines(
-            tree, tree.children_left[node_id], x_min, x_max, y_min, threshold, lines,
+            tree,
+            tree.children_left[node_id],
+            x_min,
+            x_max,
+            y_min,
+            threshold,
+            lines,
         )
         get_split_lines(
-            tree, tree.children_right[node_id], x_min, x_max, threshold, y_max, lines,
+            tree,
+            tree.children_right[node_id],
+            x_min,
+            x_max,
+            threshold,
+            y_max,
+            lines,
         )
 
 
@@ -288,7 +312,9 @@ with col_viz:
         .mark_rect(opacity=0.3)
         .encode(
             x=alt.X(
-                "Rush:Q", title="Rushing Yards", scale=alt.Scale(domain=[0, x_max_val]),
+                "Rush:Q",
+                title="Rushing Yards",
+                scale=alt.Scale(domain=[0, x_max_val]),
             ),
             x2="Rush2:Q",
             y=alt.Y(
