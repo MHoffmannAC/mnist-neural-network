@@ -105,10 +105,16 @@ with st.sidebar:
 
     min_samples_split = st.slider("Min Samples to Split", 2, 20, 5)
 
+    show_lines = st.checkbox(
+        "Show Decision Lines",
+        value=True,
+        help="Draw the lines where the tree makes its cuts.",
+    )
+
     if mode == "Iterative (Growth)":
         st.markdown("---")
         st.subheader("4. Animation Speed")
-        step_delay = st.slider("Step Delay (seconds)", 0.5, 3.0, 1.5)
+        step_delay = st.slider("Step Delay (seconds)", 0.1, 3.0, 1.0)
 
     st.markdown("---")
 
@@ -159,15 +165,59 @@ model = DecisionTreeClassifier(
     criterion=criterion,
     max_depth=current_depth,
     min_samples_split=min_samples_split,
-    random_state=42,
 )
 model.fit(X, y_encoded)
 accuracy = model.score(X, y_encoded)
 
+
+# --- Extracting Split Lines for Visualization ---
+def get_split_lines(tree, node_id, x_min, x_max, y_min, y_max, lines):
+    # If leaf node, stop
+    if tree.feature[node_id] == -2:
+        return
+
+    feature = tree.feature[node_id]
+    threshold = tree.threshold[node_id]
+
+    if feature == 0:  # Rushing Yards Split (Vertical Line)
+        lines.append(
+            {
+                "x1": threshold,
+                "x2": threshold,
+                "y1": y_min,
+                "y2": y_max,
+                "depth": node_id,
+            },
+        )
+        # Recurse children with new boundaries
+        get_split_lines(
+            tree, tree.children_left[node_id], x_min, threshold, y_min, y_max, lines,
+        )
+        get_split_lines(
+            tree, tree.children_right[node_id], threshold, x_max, y_min, y_max, lines,
+        )
+    else:  # Receiving Yards Split (Horizontal Line)
+        lines.append(
+            {
+                "x1": x_min,
+                "x2": x_max,
+                "y1": threshold,
+                "y2": threshold,
+                "depth": node_id,
+            },
+        )
+        # Recurse children with new boundaries
+        get_split_lines(
+            tree, tree.children_left[node_id], x_min, x_max, y_min, threshold, lines,
+        )
+        get_split_lines(
+            tree, tree.children_right[node_id], x_min, x_max, threshold, y_max, lines,
+        )
+
+
 # --- UI Header ---
 st.title("🌳 Decision Tree NFL Playground")
 if mode == "Iterative (Growth)":
-    # Logic fix: Check if we've reached max depth first to avoid showing "Growing" at the end
     if st.session_state.dt_current_depth >= max_depth_target:
         status_text = "✅ Depth Reached"
     elif st.session_state.dt_is_training:
@@ -180,12 +230,18 @@ if mode == "Iterative (Growth)":
 else:
     st.markdown(f"**Status:** ✅ Full Tree Computed (Depth: {max_depth_target})")
 
-# --- Decision Boundary Calculation ---
-x_max = df["Rush"].max() + 150
-y_max = df["Rec"].max() + 150
-h = 20
-xx, yy = np.meshgrid(np.arange(0, x_max, h), np.arange(0, y_max, h))
+# --- Boundary Boundaries ---
+x_max_val = df["Rush"].max() + 150
+y_max_val = df["Rec"].max() + 150
 
+# --- Get the Lines ---
+split_lines = []
+get_split_lines(model.tree_, 0, 0, x_max_val, 0, y_max_val, split_lines)
+lines_df = pd.DataFrame(split_lines)
+
+# --- Decision Boundary Background Calculation ---
+h = 20
+xx, yy = np.meshgrid(np.arange(0, x_max_val, h), np.arange(0, y_max_val, h))
 grid_points = np.c_[xx.ravel(), yy.ravel()]
 Z_encoded = model.predict(grid_points)
 Z = le.inverse_transform(Z_encoded)
@@ -218,7 +274,7 @@ with col_viz:
         )
     with m3:
         st.markdown(
-            f"""<div class="metric-card"><div class="metric-label">Training Size</div><div class="metric-value">{len(df)}</div></div>""",
+            f"""<div class="metric-card"><div class="metric-label">Total Cuts</div><div class="metric-value">{len(lines_df)}</div></div>""",
             unsafe_allow_html=True,
         )
 
@@ -232,15 +288,13 @@ with col_viz:
         .mark_rect(opacity=0.3)
         .encode(
             x=alt.X(
-                "Rush:Q",
-                title="Rushing Yards",
-                scale=alt.Scale(domain=[0, x_max]),
+                "Rush:Q", title="Rushing Yards", scale=alt.Scale(domain=[0, x_max_val]),
             ),
             x2="Rush2:Q",
             y=alt.Y(
                 "Rec:Q",
                 title="Receiving Yards",
-                scale=alt.Scale(domain=[0, y_max]),
+                scale=alt.Scale(domain=[0, y_max_val]),
             ),
             y2="Rec2:Q",
             color=alt.Color("Predicted_Role:N", scale=color_scale, legend=None),
@@ -259,21 +313,40 @@ with col_viz:
         )
     )
 
+    # Decision Lines Layer
+    layers = [background]
+
+    if show_lines and not lines_df.empty:
+        # We draw the lines. Older nodes (lower ID) get more opacity to show importance
+        lines_layer = (
+            alt.Chart(lines_df)
+            .mark_rule(color="white")
+            .encode(
+                x="x1:Q",
+                x2="x2:Q",
+                y="y1:Q",
+                y2="y2:Q",
+                strokeWidth=alt.value(2),
+                opacity=alt.value(0.6),
+            )
+        )
+        layers.append(lines_layer)
+
+    layers.append(points)
+
     st.altair_chart(
-        (background + points).properties(width="container", height=500).interactive(),
+        alt.layer(*layers).properties(width="container", height=500).interactive(),
         width="stretch",
     )
 
 with col_rules:
     st.subheader("📜 Current Decision Rules")
-    st.write("This is the 'if-then' logic the computer has generated so far:")
+    st.write("This is the 'if-then' logic generated so far:")
 
     # Export tree rules to text
     raw_rules = export_text(model, feature_names=["Rushing Yards", "Receiving Yards"])
 
-    # Clean up formatting and map class indices back to role names
     formatted_rules = raw_rules
-    # Iterate backwards through classes to avoid substring replacement issues (e.g., class 10 vs class 1)
     for i in sorted(range(len(le.classes_)), reverse=True):
         formatted_rules = formatted_rules.replace(
             f"class: {i}",
@@ -286,19 +359,18 @@ with col_rules:
     )
 
     st.info(
-        "The tree looks at each variable and makes a binary cut. As depth increases, the rules become more specific.",
+        """White lines show exactly where the model divides the space.
+        Each line is constrained by the lines that came before it.""",
     )
 
 # --- Training / Growth Loop ---
 if mode == "Iterative (Growth)" and st.session_state.dt_is_training:
     if st.session_state.dt_current_depth < max_depth_target:
-        # Use step_delay from sidebar to slow down the process
         time.sleep(step_delay)
         st.session_state.dt_current_depth += 1
         st.session_state.dt_history.append(accuracy)
         st.rerun()
     else:
-        # Stop training when target depth is reached
         st.session_state.dt_is_training = False
         st.rerun()
 
@@ -309,20 +381,18 @@ col_exp1, col_exp2 = st.columns(2)
 with col_exp1:
     st.subheader("What are axis-aligned splits?")
     st.write("""
-    Unlike SVMs which can draw diagonal or curved boundaries, **Decision Trees** only make 
-    one decision at a time based on a single variable (e.g., 'Is Rushing Yards > 500?'). 
-    
-    This is why the regions look like a collection of perfect rectangles. Every 'split' in the 
-    tree is a horizontal or vertical cut on this map.
+    Decision Trees only make one decision at a time based on a single variable.
+    This creates the "nested boxes" structure you see.
+
+    - **Vertical Lines**: Splitting based on Rushing Yards.
+    - **Horizontal Lines**: Splitting based on Receiving Yards.
     """)
 
 with col_exp2:
     st.subheader("Recursive Partitioning")
     st.write("""
-    In **Iterative Mode**, you are watching the tree grow by depth. 
-    - **Depth 1**: One split, two regions.
-    - **Depth 2**: Up to three splits, four regions.
-    
-    As the tree grows deeper, it becomes more 'opinionated' and can start to capture very 
-    specific outliers, which can lead to **overfitting**.
+    In **Iterative Mode**, you are watching the tree grow.
+    Notice how early lines cross the whole map, while deeper lines are "boxed in" by
+    previous decisions. This is the core of how decision trees build complex boundaries
+    out of simple rules.
     """)
