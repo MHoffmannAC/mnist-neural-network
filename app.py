@@ -7,19 +7,19 @@ def main() -> None:
 
     page = st.navigation(
         {
-        "General Pages": [ 
-            st.Page(
-                "pages/start.py",
-                title="Homepage",
-                icon=":material/house:",
-                default=True,
-            ),
-            st.Page(
-                "pages/data.py",
-                title="Data Sets",
-                icon=":material/description:",
-            ),
-        ],
+            "General Pages": [
+                st.Page(
+                    "pages/start.py",
+                    title="Homepage",
+                    icon=":material/house:",
+                    default=True,
+                ),
+                st.Page(
+                    "pages/data.py",
+                    title="Data Sets",
+                    icon=":material/description:",
+                ),
+            ],
             "Unsupervised Machine Learning": [
                 st.Page(
                     "pages/uml-kmeans.py",
@@ -56,6 +56,11 @@ def main() -> None:
             ],
             "Time Series": [
                 st.Page(
+                    "pages/ts-baseline.py",
+                    title="Baseline Models",
+                    icon=":material/trending_flat:",
+                ),
+                st.Page(
                     "pages/ts-sarima.py",
                     title="AR, ARIMA, SARIMA",
                     icon=":material/query_stats:",
@@ -79,9 +84,11 @@ def main() -> None:
                 ),
             ],
         },
+        expanded=True,
     )
 
     page.run()
+
 
 if __name__ == "__main__":
     main()

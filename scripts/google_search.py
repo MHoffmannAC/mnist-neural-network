@@ -1,16 +1,14 @@
-import pandas as pd
-from pytrends import dailydata
-import time
-import os
 
-def fetch_10_year_daily_data(keyword, start_year, end_year, geo='US'):
-    """
-    Fetches daily Google Trends data by stitching together smaller windows
+from pytrends import dailydata
+
+
+def fetch_10_year_daily_data(keyword, start_year, end_year, geo="US"):
+    """Fetches daily Google Trends data by stitching together smaller windows
     to maintain daily resolution over a long period.
     """
     print(f"Starting data extraction for: {keyword}")
     print(f"Range: {start_year} to {end_year} ({geo})")
-    
+
     try:
         # get_daily_data handles the heavy lifting:
         # 1. Fetches monthly data for the entire period as a baseline.
@@ -24,19 +22,19 @@ def fetch_10_year_daily_data(keyword, start_year, end_year, geo='US'):
             stop_mon=12,
             geo=geo,
             verbose=True,
-            wait_time=20.0 # Increase this if you get 429 (Too Many Requests) errors
+            wait_time=60.0, # Increase this if you get 429 (Too Many Requests) errors
         )
-        
+
         # The resulting dataframe contains:
         # - '{keyword}_unscaled': The raw daily values from the chunks
         # - '{keyword}_monthly': The monthly baseline values
         # - '{keyword}': The final, stitched, and rescaled daily data (0-100)
-        
+
         # Clean up the dataframe
         final_df = df[[keyword]].copy()
-        final_df.index.name = 'Date'
-        final_df.columns = ['Trend_Score']
-        
+        final_df.index.name = "Date"
+        final_df.columns = ["Trend_Score"]
+
         return final_df
 
     except Exception as e:
@@ -46,7 +44,7 @@ def fetch_10_year_daily_data(keyword, start_year, end_year, geo='US'):
 if __name__ == "__main__":
     # --- CONFIGURATION ---
     SEARCH_TERM = "NFL"
-    START = 2010
+    START = 2004
     END = 2026
     LOCATION = ""  # Empty string for Worldwide, or 'US', 'GB', etc.
     # ---------------------
