@@ -103,17 +103,24 @@ with st.sidebar:
     validation_mode = st.toggle(
         "Validation Mode (Backtest)",
         value=False,
-        help="Uses the last year of data to test accuracy instead of forecasting the future.",
+        help="Uses a portion of the historical data to test accuracy instead of forecasting the future.",
     )
 
     window_map = {"D": 365, "W": 52, "ME": 12, "YE": 1}
-    val_window = window_map[current_freq]
+    default_val_window = window_map[current_freq]
 
     if validation_mode:
-        st.info(
-            f"Training on data up to {val_window} {resample_freq} steps ago. Testing on final year.",
+        # User decides how long the validation window is
+        periods = st.slider(
+            f"Validation Window ({resample_freq} steps)",
+            1,
+            int(3 * default_val_window),
+            int(default_val_window),
+            help="The number of steps to hide from training and use for testing."
         )
-        periods = val_window
+        st.info(
+            f"Training on data up to {periods} {resample_freq} steps ago.",
+        )
     else:
         horizon_max = 2 * window_map[current_freq]
         periods = st.slider(
@@ -160,8 +167,9 @@ with st.sidebar:
     st.subheader("4. Diagnostics")
     diag_decomp = st.checkbox("Decomposition", value=False)
 
-    # Selection for Decomposition Mode
+    # Selection for Decomposition Mode and Period
     decomp_mode = "additive"
+    decomp_period = yearly_period
     if diag_decomp:
         decomp_mode = st.radio(
             "Decomp Mode",
@@ -170,12 +178,19 @@ with st.sidebar:
             horizontal=True,
             label_visibility="collapsed",
         )
+        decomp_period = st.number_input(
+            "Decomp Period", 
+            value=yearly_period, 
+            min_value=1,
+            help="Number of observations per cycle for decomposition (e.g., 7 for daily weekly cycles, 365 for yearly)."
+        )
 
     diag_corr = st.checkbox("Correlation (ACF/PACF)", value=False)
     diag_adf = st.checkbox("ADF (Stationarity Test)", value=False)
-
-    # Linked differencing order for diagnostics
+    
+    # Shared differencing order for diagnostics
     diag_diff_order = 0
+    adf_max_lags = None
     if diag_corr or diag_adf:
         diag_diff_order = st.slider(
             "Diagnostic Differencing Order",
@@ -184,13 +199,24 @@ with st.sidebar:
             0,
             help="Difference the data for the diagnostic plots/test below to achieve stationarity.",
         )
+        
+        if diag_adf:
+            # User can decide the maxlag for ADF to see through noise
+            adf_max_lags_val = st.slider(
+                "ADF Max Lags",
+                0,
+                int(yearly_period * 1.5),
+                0,
+                help="Maximum lags used in the ADF regression. 0 = Automatic. Large values help account for long cycles."
+            )
+            adf_max_lags = adf_max_lags_val if adf_max_lags_val > 0 else None
 
     if diag_corr:
         n_lags_to_show = st.slider(
             "Diagnostic Lags to Analyze",
             min_value=5,
             max_value=yearly_period * 4,
-            value=365 if current_freq == "D" else yearly_period * 2,
+            value= 365 if current_freq == "D" else yearly_period * 2,
             help="Higher lags reveal longer-term seasonal cycles.",
         )
 
@@ -350,8 +376,10 @@ if validation_mode:
             unsafe_allow_html=True,
         )
     with m3:
+        # Map frequency name to lowercase plural unit for the metric display
+        unit_label = {"Daily": "days", "Weekly": "weeks", "Monthly": "months", "Yearly": "years"}.get(resample_freq, "steps")
         st.markdown(
-            '<div class="metric-card"><div class="metric-label">Validation Period</div><div class="metric-value">Last Year</div></div>',
+            f'<div class="metric-card"><div class="metric-label">Validation Period</div><div class="metric-value">{periods} {unit_label}</div></div>',
             unsafe_allow_html=True,
         )
 else:
@@ -445,7 +473,7 @@ if any([diag_decomp, diag_corr, diag_adf]):
     if diag_decomp:
         st.subheader("1. Classical Decomposition")
         st.write(
-            f"Isolating Trend and Seasonality using **{decomp_mode.capitalize()}** logic (Period: {yearly_period}).",
+            f"Isolating Trend and Seasonality using **{decomp_mode.capitalize()}** logic (Period: {decomp_period}).",
         )
 
         try:
@@ -457,7 +485,7 @@ if any([diag_decomp, diag_corr, diag_adf]):
             decomp = seasonal_decompose(
                 working_series,
                 model=decomp_mode,
-                period=yearly_period,
+                period=int(decomp_period),
             )
 
             decomp_df = pd.DataFrame(
@@ -497,9 +525,7 @@ if any([diag_decomp, diag_corr, diag_adf]):
     if diag_corr:
         st.markdown("<br>", unsafe_allow_html=True)
         st.subheader("2. Correlation Analysis (ACF & PACF)")
-        st.info(
-            f"Showing correlations for data with **d={diag_diff_order}** differencing.",
-        )
+        st.info(f"Showing correlations for data with **d={diag_diff_order}** differencing.")
 
         # Using diag_series which respects the Diagnostic Differencing Order
         acf_vals = acf(diag_series, nlags=n_lags_to_show)
@@ -563,7 +589,8 @@ if any([diag_decomp, diag_corr, diag_adf]):
 
         try:
             # Using diag_series which respects the Diagnostic Differencing Order
-            adf_res = adfuller(diag_series)
+            # and adf_max_lags for deeper regression inspection
+            adf_res = adfuller(diag_series, maxlag=adf_max_lags)
             adf_stat, p_val = adf_res[0], adf_res[1]
 
             stat_col, p_col, res_col = st.columns(3)
@@ -575,7 +602,7 @@ if any([diag_decomp, diag_corr, diag_adf]):
             else:
                 res_col.error("❌ Non-Stationary (Needs Differencing)")
 
-            st.caption(f"Testing series with differencing order: {diag_diff_order}")
+            st.caption(f"Testing series with differencing order: {diag_diff_order} | Max Lags: {adf_max_lags if adf_max_lags else 'Auto'}")
         except Exception as e:
             st.error(f"Could not calculate ADF: {e}")
 
@@ -608,7 +635,105 @@ with col_sum:
         unsafe_allow_html=True,
     )
 
+# --- NEW EXTENSIVE EDUCATIONAL SECTION ---
+st.markdown("---")
+with st.expander("📚 Deep Dive: Understanding the Classical Time Series Engine", expanded=False):
+    st.write(f"### Current Selection: **{model_type}**")
+    
+    col_desc, col_comp = st.columns(2)
+    
+    with col_desc:
+        if model_type == "AR (AutoRegressive)":
+            st.markdown("#### 1. Model Description")
+            st.write("""
+            The **AutoRegressive (AR)** model operates on the premise that the future is a weighted linear combination of the past. 
+            It is essentially a self-regression where $y_t$ is regressed on $y_{t-1}, y_{t-2}, ... y_{t-p}$.
+            
+            **Assumptions:**
+            - **Stationarity**: The series must have a constant mean and variance over time. If not, the coefficients won't generalize.
+            - **Linearity**: The relationship between past and future is linear.
+            
+            **Limitations:**
+            - It struggles with 'Moving Average' noise (random shocks that persist).
+            - It has no native understanding of seasonal cycles unless $p$ is set large enough to reach back to the previous year (e.g., $p=52$ for weekly).
+            """)
+        
+        elif model_type == "ARIMA (Integrated)":
+            st.markdown("#### 1. Model Description")
+            st.write("""
+            **ARIMA** stands for AutoRegressive Integrated Moving Average. It is the "Swiss Army Knife" of non-seasonal time series.
+            - **AR (p)**: Uses past values.
+            - **I (d)**: Differences the data to make it stationary (removing trends).
+            - **MA (q)**: Uses past forecast errors to smooth out random shocks.
+            
+            **Assumptions:**
+            - The residuals (errors) after fitting should resemble 'White Noise' (random scatter with no remaining pattern).
+            
+            **Limitations:**
+            - While it can handle growth trends via differencing, it still ignores recurring seasonal spikes (like the Super Bowl) unless manually accounted for.
+            """)
+            
+        else: # SARIMA
+            st.markdown("#### 1. Model Description")
+            st.write("""
+            **SARIMA** is the most complex classical model here. It adds a "Seasonal" component to ARIMA.
+            It tracks patterns at two levels: the immediate day-to-day/week-to-week level AND the year-over-year level.
+            
+            **Assumptions:**
+            - The series has a predictable, recurring cycle of length $s$.
+            
+            **Limitations:**
+            - **Data Hunger**: Because it estimates seasonal AR and MA terms, it requires multiple years of data to achieve stability.
+            - **Computation**: High values for $P, D, Q$ can make the model very slow to converge.
+            """)
+
+    with col_comp:
+        st.markdown("#### 2. Comparative Analysis")
+        if model_type == "AR (AutoRegressive)":
+            st.write("""
+            **How it differs from the others:**
+            - Compared to **ARIMA**: AR lacks the "Moving Average" part, meaning it is less "forgiving" of random outliers or sudden shocks.
+            - Compared to **SARIMA**: AR is much simpler but will almost certainly fail to capture the massive NFL peaks every February, as it treats them as random outliers rather than a cycle.
+            """)
+        elif model_type == "ARIMA (Integrated)":
+            st.write("""
+            **How it differs from the others:**
+            - Compared to **AR**: ARIMA is more robust because of the **MA (q)** component, which helps the model recover from bad predictions.
+            - Compared to **SARIMA**: ARIMA is better for data that has a trend but NO seasonal cycle. For NFL data, ARIMA will usually predict a flat or slightly sloped line that ignores the "football season" shape.
+            """)
+        else: # SARIMA
+            st.write("""
+            **How it differs from the others:**
+            - Compared to **AR/ARIMA**: SARIMA is the only one that understands the concept of a "Season." 
+            - If you set $s=52$ (Weekly), SARIMA looks at what happened 52 weeks ago to help predict what happens today. This makes it the superior choice for NFL fan interest, which is highly cyclical.
+            """)
+
+    st.markdown("---")
+    st.markdown("#### 3. Tuning Guide: How to Experiment")
+    
+    t1, t2, t3 = st.columns(3)
+    with t1:
+        st.write("**Finding the Trend ($d$)**")
+        st.write("""
+        Use the **ADF Test** in Diagnostics. Increase the **Diagnostic Differencing Order** until the test says 'Stationary'. 
+        Then, set your model's **d** parameter to that same number.
+        """)
+    with t2:
+        st.write("**Finding the Lags ($p, q$)**")
+        st.write("""
+        Check the **ACF and PACF** plots. 
+        - If PACF cuts off at lag 2, try **p=2**.
+        - If ACF cuts off at lag 1, try **q=1**.
+        - Large spikes at the yearly period ($52$ for weekly) suggest you need **SARIMA**.
+        """)
+    with t3:
+        st.write("**Monitoring Success**")
+        st.write("""
+        - **AIC**: Lower is better. It rewards accuracy but penalizes you for making the model too complex.
+        - **MAE/RMSE**: In Validation Mode, these tell you exactly how many 'points' off your prediction was from reality.
+        """)
+
 st.markdown("---")
 st.caption(
-    "Validation mode uses the final year of data for accuracy checking. Future forecasts are hidden in this mode.",
+    "Validation mode uses a portion of historical data for accuracy checking. Future forecasts are hidden in this mode.",
 )
