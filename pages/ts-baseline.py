@@ -72,9 +72,8 @@ with st.sidebar:
 
     model_type = st.radio(
         "Select Baseline Model",
-        ["Naive", "Seasonal Naive", "Mean", "Recent Mean"],
+        ["Naive", "Seasonal Naive", "Mean", "Recent Mean", "Trend Naive (Drift)", "Trend Seasonal"],
         index=1,
-        help="Naive: carry last value forward. Seasonal: carry same day from last year forward. Mean: global average.",
     )
 
     st.markdown("---")
@@ -96,7 +95,7 @@ with st.sidebar:
 
     validation_mode = st.toggle(
         "Validation Mode (Backtest)",
-        value=False,
+        value=True,
         help="Uses the last year of data to test accuracy.",
     )
 
@@ -119,20 +118,25 @@ with st.sidebar:
 
     seasonal_m = yearly_period
     recent_k = 10
+    trend_type = "Additive"
 
-    if model_type == "Seasonal Naive":
+    if model_type == "Seasonal Naive" or model_type == "Trend Seasonal":
         seasonal_m = st.number_input(
             "Seasonal Period (m)",
             value=yearly_period,
             min_value=1,
             help="How many steps back to look for the matching seasonal value.",
         )
+        if model_type == "Trend Seasonal":
+            trend_type = st.radio("Trend Type", ["Additive", "Multiplicative"], index=0, 
+                                  help="Additive adds a linear drift. Multiplicative scales the cycle by a growth factor.")
+
     elif model_type == "Recent Mean":
         recent_k = st.slider(
             "Window Size (k)",
             2,
+            yearly_period*2,
             yearly_period,
-            10,
             help="Average of the last k observations.",
         )
 
@@ -148,7 +152,7 @@ df_processed = df_raw.set_index("ds").resample(current_freq).mean().reset_index(
 
 
 # --- Model Execution ---
-def run_baseline_engine(data, m_type, steps, is_validation, m_val, k_val):
+def run_baseline_engine(data, m_type, steps, is_validation, m_val, k_val, t_type):
     if is_validation:
         train_series = data["y"].values[:-steps]
         test_series = data["y"].values[-steps:]
@@ -157,15 +161,16 @@ def run_baseline_engine(data, m_type, steps, is_validation, m_val, k_val):
         test_series = None
 
     last_val = train_series[-1]
+    first_val = train_series[0]
+    n_train = len(train_series)
+    h_vals = np.arange(1, steps + 1)
 
     if m_type == "Naive":
         forecast = np.repeat(last_val, steps)
 
     elif m_type == "Seasonal Naive":
-        # We tile the last 'm' observations to fill the forecast horizon
         m = int(m_val)
         source_pattern = train_series[-m:]
-        # Repeat pattern until we cover steps
         reps = int(np.ceil(steps / m))
         forecast = np.tile(source_pattern, reps)[:steps]
 
@@ -177,6 +182,29 @@ def run_baseline_engine(data, m_type, steps, is_validation, m_val, k_val):
         k = int(k_val)
         local_mean = np.mean(train_series[-k:])
         forecast = np.repeat(local_mean, steps)
+        
+    elif m_type == "Trend Naive (Drift)":
+        # Calculate slope between first and last point
+        drift = (last_val - first_val) / (n_train - 1)
+        forecast = last_val + (h_vals * drift)
+        
+    elif m_type == "Trend Seasonal":
+        m = int(m_val)
+        source_pattern = train_series[-m:]
+        reps = int(np.ceil(steps / m))
+        base_seasonal = np.tile(source_pattern, reps)[:steps]
+        
+        if t_type == "Additive":
+            # Additive: Apply the linear drift to the seasonal pattern
+            drift = (last_val - first_val) / (n_train - 1)
+            forecast = base_seasonal + (h_vals * drift)
+        else:
+            # Multiplicative: Scale by compound growth factor
+            # We use a small epsilon to avoid division by zero
+            safe_first = max(0.1, first_val)
+            safe_last = max(0.1, last_val)
+            growth_rate = (safe_last / safe_first) ** (1 / (n_train - 1))
+            forecast = base_seasonal * (growth_rate ** h_vals)
 
     return forecast, test_series
 
@@ -189,6 +217,7 @@ forecast_vals, actual_vals = run_baseline_engine(
     validation_mode,
     seasonal_m,
     recent_k,
+    trend_type
 )
 
 # --- Data Preparation for Visualization ---
@@ -262,12 +291,12 @@ else:
         )
     with m2:
         st.markdown(
-            f'<div class="metric-card"><div class="metric-label">Prediction Value</div><div class="metric-value">{forecast_vals[-1]:.1f}</div></div>',
+            f'<div class="metric-card"><div class="metric-label">Avg Predicted Value</div><div class="metric-value">{np.mean(forecast_vals):.1f}</div></div>',
             unsafe_allow_html=True,
         )
     with m3:
         st.markdown(
-            f'<div class="metric-card"><div class="metric-label">Baseline Type</div><div class="metric-value">{model_type}</div></div>',
+            f'<div class="metric-card"><div class="metric-label">Model Logic</div><div class="metric-value">{model_type}</div></div>',
             unsafe_allow_html=True,
         )
 
@@ -339,35 +368,37 @@ with c1:
         "💡 **Notation Guide:** $y$ = Interest Score, $t$ = Current Time, $h$ = Forecast Steps, $m$ = Seasonal Period.",
     )
     if model_type == "Naive":
-        st.write(
-            "The simplest possible model. It assumes the future will be exactly like the most recent observation:",
-        )
+        st.write("The future is exactly like the most recent observation:")
         st.write(r"$$\hat{y}_{t+h} = y_t$$")
     elif model_type == "Seasonal Naive":
-        st.write(
-            f"Assumes the future follows the exact pattern of the last cycle ($m={seasonal_m}$):",
-        )
+        st.write(f"The future follows the exact pattern of the last cycle ($m={seasonal_m}$):")
         st.write(r"$$\hat{y}_{t+h} = y_{t+h-m}$$")
+    elif model_type == "Trend Naive (Drift)":
+        st.write("Allows the naive forecast to increase or decrease over time based on the average historical change (Drift):")
+        st.write(r"$$\hat{y}_{t+h} = y_t + h \left( \frac{y_t - y_1}{t-1} \right)$$")
+    elif model_type == "Trend Seasonal":
+        if trend_type == "Additive":
+            st.write(f"Combines the seasonal pattern ($m={seasonal_m}$) with a linear drift component:")
+            st.write(r"$$\hat{y}_{t+h} = y_{t+h-m} + h \left( \frac{y_t - y_1}{t-1} \right)$$")
+        else:
+            st.write(f"Scales the seasonal pattern ($m={seasonal_m}$) by a multiplicative growth factor ($r$):")
+            st.write(r"$$\hat{y}_{t+h} = y_{t+h-m} \times r^h$$")
     elif model_type == "Mean":
-        st.write(
-            "A global average model. It assumes the future will regress to the long-term historical mean:",
-        )
+        st.write("Assumes the future will regress to the long-term historical mean:")
         st.write("$$\\hat{y}_{t+h} = \\bar{y}$$")
     else:
-        st.write(
-            f"A compromise between Naive and Mean. It averages the last **{recent_k}** periods to smooth out noise while respecting the current level.",
-        )
+        st.write(f"Averages the last **{recent_k}** periods to smooth out noise while respecting the current level.")
 
 with c2:
     st.subheader("The Importance of Baselines")
     st.markdown(
         """
     <div class="explanation-box">
-    Baseline models are used to calculate <b>Skill Scores</b>. 
+    <b>Drift and Trend baselines</b> are essential for data that shows clear growth. 
     <br><br>
-    If your complex SARIMA or Prophet model has a higher RMSE than the <b>Seasonal Naive</b> baseline, your complex model is "unskilled" and should not be used. 
+    NFL interest has grown significantly since 2009. A standard Naive model will always under-predict because it ignores the multi-year growth trend. 
     <br><br>
-    For the NFL, Seasonal Naive is notoriously hard to beat because the 365-day cycle is so dominant.
+    If your SARIMA model cannot outperform the <b>Trend Seasonal</b> baseline, the model is likely failing to capture the underlying growth correctly.
     </div>
     """,
         unsafe_allow_html=True,
@@ -375,5 +406,5 @@ with c2:
 
 st.markdown("---")
 st.caption(
-    "Baseline Playground: Naive, Seasonal Naive, Mean, and Recent Mean implementations.",
+    "Baseline Playground: Naive, Seasonal Naive, Mean, Recent Mean, Drift, and Trend-Seasonal implementations.",
 )
