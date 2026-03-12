@@ -72,7 +72,14 @@ with st.sidebar:
 
     model_type = st.radio(
         "Select Baseline Model",
-        ["Naive", "Seasonal Naive", "Mean", "Recent Mean", "Trend Naive (Drift)", "Trend Seasonal"],
+        [
+            "Naive",
+            "Seasonal Naive",
+            "Mean",
+            "Recent Mean",
+            "Trend Naive (Drift)",
+            "Trend Seasonal",
+        ],
         index=1,
     )
 
@@ -128,14 +135,18 @@ with st.sidebar:
             help="How many steps back to look for the matching seasonal value.",
         )
         if model_type == "Trend Seasonal":
-            trend_type = st.radio("Trend Type", ["Additive", "Multiplicative"], index=0, 
-                                  help="Additive adds a linear drift. Multiplicative scales the cycle by a growth factor.")
+            trend_type = st.radio(
+                "Trend Type",
+                ["Additive", "Multiplicative"],
+                index=0,
+                help="Additive adds a linear drift. Multiplicative scales the cycle by a growth factor.",
+            )
 
     elif model_type == "Recent Mean":
         recent_k = st.slider(
             "Window Size (k)",
             2,
-            yearly_period*2,
+            yearly_period * 2,
             yearly_period,
             help="Average of the last k observations.",
         )
@@ -182,18 +193,18 @@ def run_baseline_engine(data, m_type, steps, is_validation, m_val, k_val, t_type
         k = int(k_val)
         local_mean = np.mean(train_series[-k:])
         forecast = np.repeat(local_mean, steps)
-        
+
     elif m_type == "Trend Naive (Drift)":
         # Calculate slope between first and last point
         drift = (last_val - first_val) / (n_train - 1)
         forecast = last_val + (h_vals * drift)
-        
+
     elif m_type == "Trend Seasonal":
         m = int(m_val)
         source_pattern = train_series[-m:]
         reps = int(np.ceil(steps / m))
         base_seasonal = np.tile(source_pattern, reps)[:steps]
-        
+
         if t_type == "Additive":
             # Additive: Apply the linear drift to the seasonal pattern
             drift = (last_val - first_val) / (n_train - 1)
@@ -204,20 +215,14 @@ def run_baseline_engine(data, m_type, steps, is_validation, m_val, k_val, t_type
             safe_first = max(0.1, first_val)
             safe_last = max(0.1, last_val)
             growth_rate = (safe_last / safe_first) ** (1 / (n_train - 1))
-            forecast = base_seasonal * (growth_rate ** h_vals)
+            forecast = base_seasonal * (growth_rate**h_vals)
 
     return forecast, test_series
 
 
 # Run engine
 forecast_vals, actual_vals = run_baseline_engine(
-    df_processed,
-    model_type,
-    periods,
-    validation_mode,
-    seasonal_m,
-    recent_k,
-    trend_type
+    df_processed, model_type, periods, validation_mode, seasonal_m, recent_k, trend_type,
 )
 
 # --- Data Preparation for Visualization ---
@@ -371,23 +376,35 @@ with c1:
         st.write("The future is exactly like the most recent observation:")
         st.write(r"$$\hat{y}_{t+h} = y_t$$")
     elif model_type == "Seasonal Naive":
-        st.write(f"The future follows the exact pattern of the last cycle ($m={seasonal_m}$):")
+        st.write(
+            f"The future follows the exact pattern of the last cycle ($m={seasonal_m}$):",
+        )
         st.write(r"$$\hat{y}_{t+h} = y_{t+h-m}$$")
     elif model_type == "Trend Naive (Drift)":
-        st.write("Allows the naive forecast to increase or decrease over time based on the average historical change (Drift):")
+        st.write(
+            "Allows the naive forecast to increase or decrease over time based on the average historical change (Drift):",
+        )
         st.write(r"$$\hat{y}_{t+h} = y_t + h \left( \frac{y_t - y_1}{t-1} \right)$$")
     elif model_type == "Trend Seasonal":
         if trend_type == "Additive":
-            st.write(f"Combines the seasonal pattern ($m={seasonal_m}$) with a linear drift component:")
-            st.write(r"$$\hat{y}_{t+h} = y_{t+h-m} + h \left( \frac{y_t - y_1}{t-1} \right)$$")
+            st.write(
+                f"Combines the seasonal pattern ($m={seasonal_m}$) with a linear drift component:",
+            )
+            st.write(
+                r"$$\hat{y}_{t+h} = y_{t+h-m} + h \left( \frac{y_t - y_1}{t-1} \right)$$",
+            )
         else:
-            st.write(f"Scales the seasonal pattern ($m={seasonal_m}$) by a multiplicative growth factor ($r$):")
+            st.write(
+                f"Scales the seasonal pattern ($m={seasonal_m}$) by a multiplicative growth factor ($r$):",
+            )
             st.write(r"$$\hat{y}_{t+h} = y_{t+h-m} \times r^h$$")
     elif model_type == "Mean":
         st.write("Assumes the future will regress to the long-term historical mean:")
         st.write("$$\\hat{y}_{t+h} = \\bar{y}$$")
     else:
-        st.write(f"Averages the last **{recent_k}** periods to smooth out noise while respecting the current level.")
+        st.write(
+            f"Averages the last **{recent_k}** periods to smooth out noise while respecting the current level.",
+        )
 
 with c2:
     st.subheader("The Importance of Baselines")

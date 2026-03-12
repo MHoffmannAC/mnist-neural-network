@@ -116,7 +116,7 @@ with st.sidebar:
             1,
             int(3 * default_val_window),
             int(default_val_window),
-            help="The number of steps to hide from training and use for testing."
+            help="The number of steps to hide from training and use for testing.",
         )
         st.info(
             f"Training on data up to {periods} {resample_freq} steps ago.",
@@ -179,15 +179,15 @@ with st.sidebar:
             label_visibility="collapsed",
         )
         decomp_period = st.number_input(
-            "Decomp Period", 
-            value=yearly_period, 
+            "Decomp Period",
+            value=yearly_period,
             min_value=1,
-            help="Number of observations per cycle for decomposition (e.g., 7 for daily weekly cycles, 365 for yearly)."
+            help="Number of observations per cycle for decomposition (e.g., 7 for daily weekly cycles, 365 for yearly).",
         )
 
     diag_corr = st.checkbox("Correlation (ACF/PACF)", value=False)
     diag_adf = st.checkbox("ADF (Stationarity Test)", value=False)
-    
+
     # Shared differencing order for diagnostics
     diag_diff_order = 0
     adf_max_lags = None
@@ -199,7 +199,7 @@ with st.sidebar:
             0,
             help="Difference the data for the diagnostic plots/test below to achieve stationarity.",
         )
-        
+
         if diag_adf:
             # User can decide the maxlag for ADF to see through noise
             adf_max_lags_val = st.slider(
@@ -207,7 +207,7 @@ with st.sidebar:
                 0,
                 int(yearly_period * 1.5),
                 0,
-                help="Maximum lags used in the ADF regression. 0 = Automatic. Large values help account for long cycles."
+                help="Maximum lags used in the ADF regression. 0 = Automatic. Large values help account for long cycles.",
             )
             adf_max_lags = adf_max_lags_val if adf_max_lags_val > 0 else None
 
@@ -216,7 +216,7 @@ with st.sidebar:
             "Diagnostic Lags to Analyze",
             min_value=5,
             max_value=yearly_period * 4,
-            value= 365 if current_freq == "D" else yearly_period * 2,
+            value=365 if current_freq == "D" else yearly_period * 2,
             help="Higher lags reveal longer-term seasonal cycles.",
         )
 
@@ -377,7 +377,12 @@ if validation_mode:
         )
     with m3:
         # Map frequency name to lowercase plural unit for the metric display
-        unit_label = {"Daily": "days", "Weekly": "weeks", "Monthly": "months", "Yearly": "years"}.get(resample_freq, "steps")
+        unit_label = {
+            "Daily": "days",
+            "Weekly": "weeks",
+            "Monthly": "months",
+            "Yearly": "years",
+        }.get(resample_freq, "steps")
         st.markdown(
             f'<div class="metric-card"><div class="metric-label">Validation Period</div><div class="metric-value">{periods} {unit_label}</div></div>',
             unsafe_allow_html=True,
@@ -525,7 +530,9 @@ if any([diag_decomp, diag_corr, diag_adf]):
     if diag_corr:
         st.markdown("<br>", unsafe_allow_html=True)
         st.subheader("2. Correlation Analysis (ACF & PACF)")
-        st.info(f"Showing correlations for data with **d={diag_diff_order}** differencing.")
+        st.info(
+            f"Showing correlations for data with **d={diag_diff_order}** differencing.",
+        )
 
         # Using diag_series which respects the Diagnostic Differencing Order
         acf_vals = acf(diag_series, nlags=n_lags_to_show)
@@ -602,7 +609,9 @@ if any([diag_decomp, diag_corr, diag_adf]):
             else:
                 res_col.error("❌ Non-Stationary (Needs Differencing)")
 
-            st.caption(f"Testing series with differencing order: {diag_diff_order} | Max Lags: {adf_max_lags if adf_max_lags else 'Auto'}")
+            st.caption(
+                f"Testing series with differencing order: {diag_diff_order} | Max Lags: {adf_max_lags or 'Auto'}",
+            )
         except Exception as e:
             st.error(f"Could not calculate ADF: {e}")
 
@@ -637,11 +646,13 @@ with col_sum:
 
 # --- NEW EXTENSIVE EDUCATIONAL SECTION ---
 st.markdown("---")
-with st.expander("📚 Deep Dive: Understanding the Classical Time Series Engine", expanded=False):
+with st.expander(
+    "📚 Deep Dive: Understanding the Classical Time Series Engine", expanded=False,
+):
     st.write(f"### Current Selection: **{model_type}**")
-    
+
     col_desc, col_comp = st.columns(2)
-    
+
     with col_desc:
         if model_type == "AR (AutoRegressive)":
             st.markdown("#### 1. Model Description")
@@ -657,7 +668,7 @@ with st.expander("📚 Deep Dive: Understanding the Classical Time Series Engine
             - It struggles with 'Moving Average' noise (random shocks that persist).
             - It has no native understanding of seasonal cycles unless $p$ is set large enough to reach back to the previous year (e.g., $p=52$ for weekly).
             """)
-        
+
         elif model_type == "ARIMA (Integrated)":
             st.markdown("#### 1. Model Description")
             st.write("""
@@ -672,8 +683,8 @@ with st.expander("📚 Deep Dive: Understanding the Classical Time Series Engine
             **Limitations:**
             - While it can handle growth trends via differencing, it still ignores recurring seasonal spikes (like the Super Bowl) unless manually accounted for.
             """)
-            
-        else: # SARIMA
+
+        else:  # SARIMA
             st.markdown("#### 1. Model Description")
             st.write("""
             **SARIMA** is the most complex classical model here. It adds a "Seasonal" component to ARIMA.
@@ -701,7 +712,7 @@ with st.expander("📚 Deep Dive: Understanding the Classical Time Series Engine
             - Compared to **AR**: ARIMA is more robust because of the **MA (q)** component, which helps the model recover from bad predictions.
             - Compared to **SARIMA**: ARIMA is better for data that has a trend but NO seasonal cycle. For NFL data, ARIMA will usually predict a flat or slightly sloped line that ignores the "football season" shape.
             """)
-        else: # SARIMA
+        else:  # SARIMA
             st.write("""
             **How it differs from the others:**
             - Compared to **AR/ARIMA**: SARIMA is the only one that understands the concept of a "Season." 
@@ -710,7 +721,7 @@ with st.expander("📚 Deep Dive: Understanding the Classical Time Series Engine
 
     st.markdown("---")
     st.markdown("#### 3. Tuning Guide: How to Experiment")
-    
+
     t1, t2, t3 = st.columns(3)
     with t1:
         st.write("**Finding the Trend ($d$)**")

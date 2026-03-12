@@ -70,6 +70,11 @@ def main() -> None:
                     title="Prophet",
                     icon=":material/auto_awesome:",
                 ),
+                st.Page(
+                    "pages/ts-validation.py",
+                    title="Cross Validation",
+                    icon=":material/auto_awesome:",
+                ),
             ],
             "Deep Learning": [
                 st.Page(
