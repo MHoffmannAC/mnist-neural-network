@@ -1,10 +1,10 @@
 import datetime
-
 import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
 from prophet import Prophet
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Prophet NFL Playground")
@@ -142,14 +142,25 @@ def load_nfl_trends():
 
 
 # --- Load Data ---
-df = load_nfl_trends()
+df_raw = load_nfl_trends()
 
 # --- Sidebar ---
 with st.sidebar:
     st.title("🔮 Prophet Settings")
 
-    st.subheader("1. Forecast Horizon")
-    periods = st.slider("Days to Forecast", 1, 5 * 365, 730)
+    st.subheader("1. Mode & Horizon")
+    
+    validation_mode = st.toggle(
+        "Validation Mode (Backtest)", 
+        value=False, 
+        help="Withholds the last year(s) of data to test the model accuracy."
+    )
+    
+    if validation_mode:
+        periods = st.slider("Validation Days (withheld)", 30, 3 * 365, 365)
+        st.info(f"Training on data until {df_raw['ds'].iloc[-periods-1].strftime('%Y-%m-%d')}.")
+    else:
+        periods = st.slider("Days to Forecast (Future)", 1, 5 * 365, 730)
 
     st.markdown("---")
     st.subheader("2. Seasonal Complexity")
@@ -157,7 +168,7 @@ with st.sidebar:
     season_mode = st.radio("Seasonality Mode", ["additive", "multiplicative"], index=0)
 
     include_yearly = st.checkbox("Yearly (NFL Season Cycle)", value=True)
-    fourier_order_year = st.slider("Yearly Fourier Order", 2, 30, 5)
+    fourier_order_year = st.slider("Yearly Fourier Order", 2, 30, 10)
 
     include_weekly = st.checkbox("Weekly (Game Cycles)", value=False)
     fourier_order_week = st.slider(
@@ -219,9 +230,9 @@ with st.sidebar:
         ["Full History", "Last 3 Years", "Last 6 Months", "Custom Range"],
     )
     if view_mode == "Custom Range":
-        min_selectable = df["ds"].min().to_pydatetime()
+        min_selectable = df_raw["ds"].min().to_pydatetime()
         max_selectable = (
-            df["ds"].max() + datetime.timedelta(days=periods)
+            df_raw["ds"].max() + datetime.timedelta(days=(0 if validation_mode else periods))
         ).to_pydatetime()
         date_range = st.date_input(
             "Select Date Range",
@@ -242,7 +253,7 @@ with st.sidebar:
     if growth_type == "logistic":
         cap_val = st.slider(
             "Interest Cap (Max Potential)",
-            float(df["y"].max()),
+            float(df_raw["y"].max()),
             500.0,
             200.0,
             help="The theoretical maximum interest score the trend can reach.",
@@ -259,6 +270,7 @@ with st.sidebar:
 def run_prophet_engine(
     _df,
     periods,
+    is_validation,
     include_weekly,
     conditional_weekly,
     use_pre_cond,
@@ -278,8 +290,12 @@ def run_prophet_engine(
     growth,
     cap,
 ):
+    # Slice data if in validation mode
+    if is_validation:
+        train_df = _df.iloc[:-periods].copy()
+    else:
+        train_df = _df.copy()
 
-    train_df = _df.copy()
     if growth == "logistic":
         train_df["cap"] = cap
         train_df["floor"] = 0.0
@@ -383,8 +399,9 @@ def run_prophet_engine(
 
 # Run the cached engine
 forecast, reg_impact = run_prophet_engine(
-    df,
+    df_raw,
     periods,
+    validation_mode,
     include_weekly,
     use_conditional,
     use_pre_conditional,
@@ -406,23 +423,49 @@ forecast, reg_impact = run_prophet_engine(
 )
 
 # --- Visualization Filtering ---
-historical = df.copy()
-historical["Type"] = "Actual"
-forecast_only = forecast[forecast["ds"] > df["ds"].max()].copy()
-forecast_only["Type"] = "Forecast"
-plot_df = pd.concat(
-    [
-        historical[["ds", "y", "Type"]],
-        forecast_only[["ds", "yhat", "Type"]].rename(columns={"yhat": "y"}),
-    ],
-)
+if validation_mode:
+    # Split historical data into training and testing
+    historical_train = df_raw.iloc[:-periods].copy()
+    historical_train["Type"] = "Actual (Training)"
+    
+    historical_test = df_raw.iloc[-periods:].copy()
+    historical_test["Type"] = "Actual (Ground Truth)"
+    
+    # Prediction on the test window
+    forecast_window = forecast.tail(periods).copy()
+    forecast_window["Type"] = "Validation Prediction"
+    
+    plot_df = pd.concat([
+        historical_train[["ds", "y", "Type"]],
+        historical_test[["ds", "y", "Type"]],
+        forecast_window[["ds", "yhat", "Type"]].rename(columns={"yhat": "y"})
+    ])
+    
+    # Accuracy Metrics Calculation
+    y_true = historical_test['y'].values
+    y_pred = forecast_window['yhat'].values
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    
+else:
+    historical = df_raw.copy()
+    historical["Type"] = "Actual"
+    forecast_only = forecast[forecast["ds"] > df_raw["ds"].max()].copy()
+    forecast_only["Type"] = "Forecast"
+    plot_df = pd.concat(
+        [
+            historical[["ds", "y", "Type"]],
+            forecast_only[["ds", "yhat", "Type"]].rename(columns={"yhat": "y"}),
+        ],
+    )
 
+# Filtering view
 if view_mode == "Last 6 Months":
-    filter_start = df["ds"].max() - datetime.timedelta(days=180)
+    filter_start = df_raw["ds"].max() - datetime.timedelta(days=180)
     plot_df = plot_df[plot_df["ds"] >= filter_start]
     forecast_display = forecast[forecast["ds"] >= filter_start]
 elif view_mode == "Last 3 Years":
-    filter_start = df["ds"].max() - pd.DateOffset(years=3)
+    filter_start = df_raw["ds"].max() - pd.DateOffset(years=3)
     plot_df = plot_df[plot_df["ds"] >= filter_start]
     forecast_display = forecast[forecast["ds"] >= filter_start]
 elif view_mode == "Custom Range" and len(date_range) == 2:
@@ -441,49 +484,70 @@ else:
 st.title("🔮 Prophet NFL Trends Playground")
 
 m1, m2, m3 = st.columns(3)
-with m1:
-    st.markdown(
-        f'<div class="metric-card"><div class="metric-label">Predicted Peak Interest</div><div class="metric-value">{forecast["yhat"].max():.1f}</div></div>',
-        unsafe_allow_html=True,
-    )
-with m2:
-    growth_label = (
-        "Saturation Headroom" if growth_type == "logistic" else "Base Trend Growth"
-    )
-    if growth_type == "logistic":
-        headroom = cap_val - forecast["trend"].iloc[-1]
-        growth_val = f"{headroom:.1f}"
-    else:
-        growth_pct = (forecast["trend"].iloc[-1] / forecast["trend"].iloc[0]) - 1
-        growth_val = f"{growth_pct:+.1%}"
-    st.markdown(
-        f'<div class="metric-card"><div class="metric-label">{growth_label}</div><div class="metric-value">{growth_val}</div></div>',
-        unsafe_allow_html=True,
-    )
-with m3:
-    reg_label = (
-        "Season Bonus (Shift)" if season_mode == "multiplicative" else "Season Offset"
-    )
-    reg_val = (
-        f"+{reg_impact:.1%}"
-        if season_mode == "multiplicative"
-        else f"+{reg_impact:.1f}"
-    )
-    st.markdown(
-        f'<div class="metric-card"><div class="metric-label">{reg_label}</div><div class="metric-value">{reg_val if use_regressor else "N/A"}</div></div>',
-        unsafe_allow_html=True,
-    )
+
+if validation_mode:
+    with m1:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Mean Absolute Error (MAE)</div><div class="metric-value">{mae:.2f}</div></div>', unsafe_allow_html=True)
+    with m2:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Root Mean Sq. Error (RMSE)</div><div class="metric-value">{rmse:.2f}</div></div>', unsafe_allow_html=True)
+    with m3:
+        st.markdown(f'<div class="metric-card"><div class="metric-label">Validation Period</div><div class="metric-value">{periods} days</div></div>', unsafe_allow_html=True)
+else:
+    with m1:
+        st.markdown(
+            f'<div class="metric-card"><div class="metric-label">Predicted Peak Interest</div><div class="metric-value">{forecast["yhat"].max():.1f}</div></div>',
+            unsafe_allow_html=True,
+        )
+    with m2:
+        growth_label = (
+            "Saturation Headroom" if growth_type == "logistic" else "Base Trend Growth"
+        )
+        if growth_type == "logistic":
+            headroom = cap_val - forecast["trend"].iloc[-1]
+            growth_val = f"{headroom:.1f}"
+        else:
+            growth_pct = (forecast["trend"].iloc[-1] / forecast["trend"].iloc[0]) - 1
+            growth_val = f"{growth_pct:+.1%}"
+        st.markdown(
+            f'<div class="metric-card"><div class="metric-label">{growth_label}</div><div class="metric-value">{growth_val}</div></div>',
+            unsafe_allow_html=True,
+        )
+    with m3:
+        reg_label = (
+            "Season Bonus (Shift)" if season_mode == "multiplicative" else "Season Offset"
+        )
+        reg_val = (
+            f"+{reg_impact:.1%}"
+            if season_mode == "multiplicative"
+            else f"+{reg_impact:.1f}"
+        )
+        st.markdown(
+            f'<div class="metric-card"><div class="metric-label">{reg_label}</div><div class="metric-value">{reg_val if use_regressor else "N/A"}</div></div>',
+            unsafe_allow_html=True,
+        )
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # --- Forecast Plot ---
-st.subheader("📈 Interest Forecast")
+st.subheader("📅 Accuracy Check: Actual vs. Predicted" if validation_mode else "📈 Interest Forecast")
 
 y_axis_scale = alt.Scale(domainMin=0) if growth_type == "logistic" else alt.Scale()
 
+# Legend Map
+color_map = {
+    "Actual": "#94a3b8",
+    "Actual (Training)": "#94a3b8",
+    "Actual (Ground Truth)": "#f8fafc",
+    "Forecast": "#fbbf24",
+    "Validation Prediction": "#fbbf24",
+}
+color_domain = [t for t in color_map.keys() if t in plot_df["Type"].unique()]
+color_range = [color_map[t] for t in color_domain]
+
+# 1. Uncertainty Band
 band = (
     alt.Chart(forecast_display)
-    .mark_area(opacity=0.35, color="#fbbf24")
+    .mark_area(opacity=0.3, color="#fbbf24")
     .encode(
         x="ds:T",
         y="yhat_lower:Q",
@@ -494,34 +558,44 @@ band = (
         ],
     )
 )
-line = (
-    alt.Chart(plot_df)
-    .mark_line()
-    .encode(
-        x=alt.X("ds:T", title="Date"),
-        y=alt.Y("y:Q", title="Interest Score", scale=y_axis_scale),
-        color=alt.Color(
-            "Type:N",
-            scale=alt.Scale(
-                domain=["Actual", "Forecast"],
-                range=["#94a3b8", "#fbbf24"],
-            ),
-        ),
-        strokeDash=alt.condition(
-            alt.datum.Type == "Forecast",
-            alt.value([5, 5]),
-            alt.value([0]),
-        ),
-        tooltip=[
-            alt.Tooltip("ds:T", title="Date"),
-            alt.Tooltip("y:Q", title="Value", format=".1f"),
-        ],
-    )
+
+# 2. Base Chart Encoding
+base = alt.Chart(plot_df).encode(
+    x=alt.X("ds:T", title="Date"),
+    y=alt.Y("y:Q", title="Interest Score", scale=y_axis_scale),
+    color=alt.Color(
+        "Type:N",
+        scale=alt.Scale(domain=color_domain, range=color_range),
+        legend=alt.Legend(title="Data Series"),
+    ),
+    tooltip=[
+        alt.Tooltip("ds:T", title="Date"),
+        alt.Tooltip("y:Q", title="Value", format=".1f"),
+        alt.Tooltip("Type:N"),
+    ],
 )
-st.altair_chart(
-    (band + line).properties(width="container", height=450).interactive(),
-    width="stretch",
-)
+
+# 3. Layer: Historical Line (Actual/Training)
+historical_line = base.transform_filter(
+    (alt.datum.Type == "Actual") | (alt.datum.Type == "Actual (Training)")
+).mark_line(opacity=0.7)
+
+# 4. Layer: Ground Truth Dots
+ground_truth_points = base.transform_filter(
+    alt.datum.Type == "Actual (Ground Truth)"
+).mark_point(size=60, filled=True, opacity=1.0)
+
+# 5. Layer: Prediction Line (Dashed) - Placed last to be on top
+prediction_line = base.transform_filter(
+    (alt.datum.Type == "Forecast") | (alt.datum.Type == "Validation Prediction")
+).mark_line(strokeDash=[5, 5])
+
+# 6. Combined Chart
+final_chart = alt.layer(
+    band, historical_line, ground_truth_points, prediction_line
+).properties(width="container", height=450).interactive()
+
+st.altair_chart(final_chart, width="stretch")
 
 # --- Components ---
 st.markdown("---")
