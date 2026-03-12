@@ -110,9 +110,9 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("3. Model for Simulation")
     model_choice = st.selectbox(
-        "Test Model", 
-        ["SARIMA (1,1,1)x(1,1,1)", "Seasonal Naive", "Naive", "Global Mean"],
-        index=0
+        "Test Model",
+        [ "Naive", "Seasonal Naive", "Global Mean", "SARIMA (1,1,1)x(1,1,1)"],
+        index=1
     )
     if "SARIMA" in model_choice:
         st.info(f"Using SARIMA: $(1, 1, 1) \\times (1, 1, 1)_{{{yearly_period}}}$")
