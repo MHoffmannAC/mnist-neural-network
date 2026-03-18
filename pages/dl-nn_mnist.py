@@ -169,20 +169,27 @@ def get_rf_base64(model, target_layer_idx, node_idx):
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 
-def array_to_base64(arr):
+def array_to_base64(arr, cmap_name="viridis", symmetric=False):
     """Helper to convert a gradient/saliency 2D array to a base64 image with robust normalization."""
-    abs_arr = np.abs(arr)
-    max_raw = np.max(abs_arr)
-
-    if max_raw < 1e-25:
-        norm_arr = np.zeros_like(arr)
+    if symmetric:
+        abs_arr = np.abs(arr)
+        max_raw = np.max(abs_arr)
+        if max_raw < 1e-25:
+            norm_arr = np.zeros_like(arr)
+        else:
+            p_val = np.percentile(abs_arr, 99.5)
+            divisor = p_val if p_val > (max_raw * 0.001) else max_raw
+            norm_arr = np.clip(arr / (divisor + 1e-30), -1.0, 1.0)
+            norm_arr = (norm_arr + 1) / 2
     else:
-        p_val = np.percentile(abs_arr, 99.5)
-        divisor = p_val if p_val > (max_raw * 0.001) else max_raw
-        norm_arr = np.clip(arr / (divisor + 1e-30), -1.0, 1.0)
+        mn, mx = np.min(arr), np.max(arr)
+        if mx - mn < 1e-25:
+            norm_arr = np.zeros_like(arr)
+        else:
+            norm_arr = (arr - mn) / (mx - mn + 1e-30)
 
-    cmap = mpl.colormaps["RdBu"]
-    mapped_img = cmap((norm_arr + 1) / 2)
+    cmap = mpl.colormaps[cmap_name]
+    mapped_img = cmap(norm_arr)
     img = Image.fromarray((mapped_img * 255).astype(np.uint8))
     img = img.resize((84, 84), Image.Resampling.NEAREST)
 
@@ -192,7 +199,11 @@ def array_to_base64(arr):
 
 
 def compute_all_saliencies(model, test_input):
-    """Calculates saliency maps by taking gradients of PRE-ACTIVATION values."""
+    """Calculates attribution maps by taking Input * Gradients of PRE-ACTIVATION values."""
+    # Optimization: If training, we skip this to save performance
+    if st.session_state.is_training:
+        return None
+
     img_tensor = tf.convert_to_tensor(test_input, dtype=tf.float32)
     saliencies = [None]
 
@@ -214,7 +225,9 @@ def compute_all_saliencies(model, test_input):
         for n_idx in range(pre_act.shape[1]):
             grad = tape.gradient(pre_act[0, n_idx], img_tensor)
             if grad is not None:
-                layer_sals.append(grad.numpy()[0, :, :, 0])
+                # Feature Map = Input * Gradient
+                attribution = test_input[0, :, :, 0] * grad.numpy()[0, :, :, 0]
+                layer_sals.append(attribution)
             else:
                 layer_sals.append(np.zeros((28, 28)))
         saliencies.append(layer_sals)
@@ -258,12 +271,17 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
         )
         nodes = []
         for i in range(units):
-            rf_b64 = get_rf_base64(model, l_idx + 1, i) if model else ""
-            sal_b64 = (
-                array_to_base64(saliencies[l_idx + 1][i])
-                if saliencies and len(saliencies) > l_idx + 1
-                else ""
-            )
+            # Speed optimization: Only generate base64 if not currently training
+            rf_b64 = ""
+            sal_b64 = ""
+            if not st.session_state.is_training:
+                rf_b64 = get_rf_base64(model, l_idx + 1, i) if model else ""
+                sal_b64 = (
+                    array_to_base64(saliencies[l_idx + 1][i], cmap_name="viridis")
+                    if saliencies and len(saliencies) > l_idx + 1
+                    else ""
+                )
+
             nodes.append(
                 {
                     "id": f"h_{l_idx}_{i}",
@@ -279,8 +297,15 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
     out_acts = activations[-1] if activations else np.zeros(10)
     out_nodes = []
     for i in range(10):
-        rf_b64 = get_rf_base64(model, len(layers_config) + 1, i) if model else ""
-        sal_b64 = array_to_base64(saliencies[-1][i]) if saliencies else ""
+        rf_b64 = ""
+        sal_b64 = ""
+        if not st.session_state.is_training:
+            rf_b64 = get_rf_base64(model, len(layers_config) + 1, i) if model else ""
+            sal_b64 = (
+                array_to_base64(saliencies[-1][i], cmap_name="viridis")
+                if saliencies
+                else ""
+            )
         out_nodes.append(
             {
                 "id": f"out_{i}",
@@ -351,6 +376,12 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
                 if node_b[3] == "dots":
                     continue
                 norm_dst = float(np.clip(node_b[2] / max_dst, 0, 1))
+
+                # Speed optimization: Only draw significant connections during training
+                if st.session_state.is_training:
+                    if norm_dst < 0.2:
+                        continue  # Skip drawing lines to quiet neurons
+
                 min_opacity = 0.15
                 opacity = (
                     min(
@@ -410,6 +441,7 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
                     f'<text x="{x + 20}" y="{y + 4}" fill="#e2e8f0" font-family="monospace" font-size="12">{label}</text>',
                 )
 
+            # Only show tooltips if we have the data (not during training)
             if rf_b64:
                 # Dynamic positioning to avoid clipping
                 width_bg = 188 if saliencies else 94
@@ -437,12 +469,8 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
                 text_y_act = dy - 5
 
                 sal_svg = ""
-                if saliencies:
-                    img_data = (
-                        sal_b64
-                        or "iVBORw0KGgoAAAANSUhEUgAAAFQAAABUCAYAAAAcaxDBAAAAAXNSR0IArs4c6QAAAExJREFUeF7twTEBAAAAwqD1T20ND6AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOBvAHAQAAH8S88fAAAAAElFTkSuQmCC"
-                    )
-                    sal_svg = f'<text x="{dx + 42 + 94}" y="{text_y_header}" class="tooltip-text" text-anchor="middle">SALIENCY</text><image href="data:image/png;base64,{img_data}" x="{dx + 94}" y="{dy}" width="84" height="84" />'
+                if saliencies and sal_b64:
+                    sal_svg = f'<text x="{dx + 42 + 94}" y="{text_y_header}" class="tooltip-text" text-anchor="middle">FEATURE MAP</text><image href="data:image/png;base64,{sal_b64}" x="{dx + 94}" y="{dy}" width="84" height="84" />'
 
                 svg_tooltips.append(
                     f'<g class="tooltip-container" transform="translate({x}, {y})">'
@@ -681,11 +709,11 @@ with col_testing:
 
 with col_network:
     st.markdown("### ⚡ Network Architecture")
-    st.caption("Hover over neurons to inspect Receptive Fields & Saliency Maps!")
+    st.caption("Hover over neurons to inspect Receptive Fields & Feature Maps!")
     svg_string = draw_network_svg(
         st.session_state.layers_config,
         activations,
-        (None if st.session_state.is_training else st.session_state.model),
+        st.session_state.model,
         saliencies,
     )
     st.markdown(svg_string, unsafe_allow_html=True)
@@ -769,7 +797,7 @@ if st.session_state.is_training:
         st.session_state.history["loss"].extend(hist.history["loss"])
         st.session_state.history["acc"].extend(hist.history["accuracy"])
         st.session_state.history["val_acc"].extend(hist.history["val_accuracy"])
-        time.sleep(0.05)
+        time.sleep(0.01)  # Reduced sleep
         st.rerun()
     else:
         st.session_state.is_training = False
