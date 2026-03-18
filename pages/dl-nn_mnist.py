@@ -178,7 +178,8 @@ def array_to_base64(arr, cmap_name="viridis", symmetric=False):
         img = Image.new('RGB', (84, 84), (15, 23, 42)) 
     else:
         if symmetric:
-            limit = np.percentile(np.abs(arr), 99.5) + 1e-12
+            abs_arr = np.abs(arr)
+            limit = np.percentile(abs_arr, 99.5) + 1e-12
             norm_arr = np.clip(arr / limit, -1.0, 1.0)
             norm_arr = (norm_arr + 1) / 2
         else:
@@ -197,44 +198,30 @@ def array_to_base64(arr, cmap_name="viridis", symmetric=False):
 
 
 def compute_all_saliencies(model, test_input):
-    """Calculates attribution maps by taking Input * Gradients of PRE-ACTIVATION values."""
-    # PERFORMANCE: Skip if training to keep the UI snappy
-    if st.session_state.is_training:
+    """Calculates activation maps by multiplying Input * Effective Weights (Template)."""
+    if st.session_state.is_training or test_input is None:
         return None
 
-    img_tensor = tf.convert_to_tensor(test_input, dtype=tf.float32)
+    # test_input is (1, 28, 28, 1) -> get (28, 28)
+    input_img = test_input[0, :, :, 0]
     saliencies = [None]
 
-    # Use persistent tape to allow multiple gradient lookups
-    with tf.GradientTape(persistent=True) as tape:
-        tape.watch(img_tensor)
-        curr = img_tensor
-        layer_preactivations = []
-        
-        for i, layer in enumerate(model.layers):
-            if i == 0: # Flatten
-                curr = layer(curr)
-                continue
-            
-            # Use actual TF variables to ensure gradient chain isn't broken
-            w, b = layer.weights
-            pre_act = tf.matmul(curr, w) + b
-            layer_preactivations.append(pre_act)
-            curr = layer.activation(pre_act)
-
-    for pre_act in layer_preactivations:
+    # Iterate through each layer (excluding Flatten at 0)
+    for l_idx in range(1, len(model.layers)):
         layer_sals = []
-        for n_idx in range(pre_act.shape[1]):
-            grad = tape.gradient(pre_act[0, n_idx], img_tensor)
-            if grad is not None:
-                # Feature Map = Input * Gradient (Standard Saliency Technique)
-                attribution = test_input[0, :, :, 0] * grad.numpy()[0, :, :, 0]
-                layer_sals.append(attribution)
-            else:
-                layer_sals.append(np.zeros((28, 28)))
+        num_nodes = model.layers[l_idx].output_shape[1]
+        
+        for n_idx in range(num_nodes):
+            # Get the "template" of what this neuron is looking for
+            template = get_effective_receptive_field(model, l_idx, n_idx)
+            
+            # The "Feature Map" is the input image masked by the template
+            # This shows exactly which drawn pixels are contributing to the activation
+            feature_map = input_img * template
+            layer_sals.append(feature_map)
+            
         saliencies.append(layer_sals)
 
-    del tape
     return saliencies
 
 
@@ -542,8 +529,8 @@ with st.sidebar:
     epochs = st.number_input("Max Epochs", min_value=1, value=50)
     update_freq = st.selectbox(
         "Update UI every N Epochs",
-        [1, 2, 5, 10, 25, 50, 100],
-        index=3, # Higher default update freq for M4 stability
+        [1, 2, 5, 10, 20, 50, 100],
+        index=0,
     )
 
     current_config = {
