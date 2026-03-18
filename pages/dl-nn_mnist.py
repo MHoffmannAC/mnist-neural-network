@@ -171,27 +171,25 @@ def get_rf_base64(model, target_layer_idx, node_idx):
 
 def array_to_base64(arr, cmap_name="viridis", symmetric=False):
     """Helper to convert a gradient/saliency 2D array to a base64 image with robust normalization."""
-    if symmetric:
-        abs_arr = np.abs(arr)
-        max_raw = np.max(abs_arr)
-        if max_raw < 1e-25:
-            norm_arr = np.zeros_like(arr)
-        else:
-            p_val = np.percentile(abs_arr, 99.5)
-            divisor = p_val if p_val > (max_raw * 0.001) else max_raw
-            norm_arr = np.clip(arr / (divisor + 1e-30), -1.0, 1.0)
-            norm_arr = (norm_arr + 1) / 2
+    # Robust check for zero arrays to prevent "purple square" Viridis(0) issues
+    max_val = np.max(np.abs(arr))
+    if max_val < 1e-15:
+        # Return a slightly transparent dark square to match the theme
+        img = Image.new('RGB', (84, 84), (15, 23, 42)) 
     else:
-        mn, mx = np.min(arr), np.max(arr)
-        if mx - mn < 1e-25:
-            norm_arr = np.zeros_like(arr)
+        if symmetric:
+            limit = np.percentile(np.abs(arr), 99.5) + 1e-12
+            norm_arr = np.clip(arr / limit, -1.0, 1.0)
+            norm_arr = (norm_arr + 1) / 2
         else:
-            norm_arr = (arr - mn) / (mx - mn + 1e-30)
+            # Stretch the feature map to full viridis range for visibility
+            mn, mx = np.min(arr), np.max(arr)
+            norm_arr = (arr - mn) / (mx - mn + 1e-12)
 
-    cmap = mpl.colormaps[cmap_name]
-    mapped_img = cmap(norm_arr)
-    img = Image.fromarray((mapped_img * 255).astype(np.uint8))
-    img = img.resize((84, 84), Image.Resampling.NEAREST)
+        cmap = mpl.colormaps[cmap_name]
+        mapped_img = cmap(norm_arr)
+        img = Image.fromarray((mapped_img * 255).astype(np.uint8))
+        img = img.resize((84, 84), Image.Resampling.NEAREST)
 
     buffered = io.BytesIO()
     img.save(buffered, format="PNG")
@@ -200,22 +198,26 @@ def array_to_base64(arr, cmap_name="viridis", symmetric=False):
 
 def compute_all_saliencies(model, test_input):
     """Calculates attribution maps by taking Input * Gradients of PRE-ACTIVATION values."""
-    # Optimization: If training, we skip this to save performance
+    # PERFORMANCE: Skip if training to keep the UI snappy
     if st.session_state.is_training:
         return None
 
     img_tensor = tf.convert_to_tensor(test_input, dtype=tf.float32)
     saliencies = [None]
 
+    # Use persistent tape to allow multiple gradient lookups
     with tf.GradientTape(persistent=True) as tape:
         tape.watch(img_tensor)
         curr = img_tensor
         layer_preactivations = []
+        
         for i, layer in enumerate(model.layers):
-            if i == 0:
+            if i == 0: # Flatten
                 curr = layer(curr)
                 continue
-            w, b = layer.get_weights()
+            
+            # Use actual TF variables to ensure gradient chain isn't broken
+            w, b = layer.weights
             pre_act = tf.matmul(curr, w) + b
             layer_preactivations.append(pre_act)
             curr = layer.activation(pre_act)
@@ -225,7 +227,7 @@ def compute_all_saliencies(model, test_input):
         for n_idx in range(pre_act.shape[1]):
             grad = tape.gradient(pre_act[0, n_idx], img_tensor)
             if grad is not None:
-                # Feature Map = Input * Gradient
+                # Feature Map = Input * Gradient (Standard Saliency Technique)
                 attribution = test_input[0, :, :, 0] * grad.numpy()[0, :, :, 0]
                 layer_sals.append(attribution)
             else:
@@ -271,17 +273,17 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
         )
         nodes = []
         for i in range(units):
-            # Speed optimization: Only generate base64 if not currently training
+            # Speed optimization: Only generate images if training is paused
             rf_b64 = ""
             sal_b64 = ""
             if not st.session_state.is_training:
                 rf_b64 = get_rf_base64(model, l_idx + 1, i) if model else ""
                 sal_b64 = (
-                    array_to_base64(saliencies[l_idx + 1][i], cmap_name="viridis")
+                    array_to_base64(saliencies[l_idx + 1][i], cmap_name="viridis", symmetric=False)
                     if saliencies and len(saliencies) > l_idx + 1
                     else ""
                 )
-
+            
             nodes.append(
                 {
                     "id": f"h_{l_idx}_{i}",
@@ -302,7 +304,7 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
         if not st.session_state.is_training:
             rf_b64 = get_rf_base64(model, len(layers_config) + 1, i) if model else ""
             sal_b64 = (
-                array_to_base64(saliencies[-1][i], cmap_name="viridis")
+                array_to_base64(saliencies[-1][i], cmap_name="viridis", symmetric=False)
                 if saliencies
                 else ""
             )
@@ -376,12 +378,11 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
                 if node_b[3] == "dots":
                     continue
                 norm_dst = float(np.clip(node_b[2] / max_dst, 0, 1))
-
-                # Speed optimization: Only draw significant connections during training
+                
+                # OPTIMIZATION: Only draw significant connections during training to save SVG bandwidth
                 if st.session_state.is_training:
-                    if norm_dst < 0.2:
-                        continue  # Skip drawing lines to quiet neurons
-
+                    if norm_dst < 0.2: continue 
+                
                 min_opacity = 0.15
                 opacity = (
                     min(
@@ -441,7 +442,7 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
                     f'<text x="{x + 20}" y="{y + 4}" fill="#e2e8f0" font-family="monospace" font-size="12">{label}</text>',
                 )
 
-            # Only show tooltips if we have the data (not during training)
+            # Tooltips are hidden during training to prevent UI stuttering
             if rf_b64:
                 # Dynamic positioning to avoid clipping
                 width_bg = 188 if saliencies else 94
@@ -451,11 +452,11 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
                 if x > width - width_bg - 30:
                     dx = -width_bg - 15
 
-                # Vertical placement: dy is the image top-left offset
+                # Vertical placement
                 dy = -42
-                if y < 110:  # Near top edge, shift tooltip down
+                if y < 110:  
                     dy = 40
-                elif y > height - 110:  # Near bottom edge, shift tooltip higher
+                elif y > height - 110:  
                     dy = -75
 
                 act_text = f"Act: {val:.3f}" if activations is not None else "Act: --"
@@ -541,8 +542,8 @@ with st.sidebar:
     epochs = st.number_input("Max Epochs", min_value=1, value=50)
     update_freq = st.selectbox(
         "Update UI every N Epochs",
-        [1, 2, 5, 10, 20, 50, 100],
-        index=0,
+        [1, 2, 5, 10, 25, 50, 100],
+        index=3, # Higher default update freq for M4 stability
     )
 
     current_config = {
@@ -784,20 +785,26 @@ if st.session_state.is_training:
     if st.session_state.current_epoch < epochs:
         run_n = min(update_freq, epochs - st.session_state.current_epoch)
         target = st.session_state.current_epoch + run_n
-        hist = st.session_state.model.fit(
-            x_train,
-            y_train,
-            epochs=target,
-            initial_epoch=st.session_state.current_epoch,
-            validation_data=(x_val, y_val),
-            batch_size=128,
-            verbose=0,
-        )
+        
+        # Optimization: Explicitly force CPU for these tiny operations to avoid MPS overhead
+        with tf.device('/CPU:0'):
+            hist = st.session_state.model.fit(
+                x_train,
+                y_train,
+                epochs=target,
+                initial_epoch=st.session_state.current_epoch,
+                validation_data=(x_val, y_val),
+                batch_size=128,
+                verbose=0,
+            )
+        
         st.session_state.current_epoch = target
         st.session_state.history["loss"].extend(hist.history["loss"])
         st.session_state.history["acc"].extend(hist.history["accuracy"])
         st.session_state.history["val_acc"].extend(hist.history["val_accuracy"])
-        time.sleep(0.01)  # Reduced sleep
+        
+        # Increase sleep slightly to prevent browser-side render congestion on M4
+        time.sleep(0.05) 
         st.rerun()
     else:
         st.session_state.is_training = False
