@@ -209,7 +209,8 @@ def compute_all_saliencies(model, test_input):
     # Iterate through each layer (excluding Flatten at 0)
     for l_idx in range(1, len(model.layers)):
         layer_sals = []
-        num_nodes = model.layers[l_idx].output_shape[1]
+        # FIX: Use .units instead of .output_shape[1] to avoid AttributeError
+        num_nodes = model.layers[l_idx].units
         
         for n_idx in range(num_nodes):
             # Get the "template" of what this neuron is looking for
