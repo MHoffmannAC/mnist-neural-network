@@ -9,6 +9,19 @@ import streamlit as st
 from prophet import Prophet
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
+# Constants for month values
+AUGUST = 8
+SEPTEMBER = 9
+DECEMBER = 12
+JANUARY = 1
+FEBRUARY = 2
+
+# Constant for holiday effect threshold
+HOLIDAY_EFFECT_THRESHOLD = 0.001
+
+# Constant for custom date range selection
+CUSTOM_RANGE_DATE_COUNT = 2
+
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Prophet NFL Playground")
 
@@ -17,7 +30,7 @@ st.set_page_config(layout="wide", page_title="Prophet NFL Playground")
 if "model_lock" not in st.session_state:
     st.session_state.model_lock = threading.Lock()
 
-# Custom CSS for the Playground aesthetic (Updated to support modern Streamlit selectors)
+# Custom CSS for the Playground aesthetic
 st.markdown(
     """
 <style>
@@ -55,7 +68,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Chronological Structure: (Draft Date, Preseason Start, Regular Season Start, Postseason Start, Super Bowl Date)
+# Chronological Structure: (Draft, Preseason, Regular, Postseason, Super Bowl)
 NFL_SCHEDULE = [
     ("2009-04-25", "2009-08-13", "2009-09-10", "2010-01-09", "2010-02-07"),
     ("2010-04-22", "2010-08-12", "2010-09-09", "2011-01-08", "2011-02-06"),
@@ -133,19 +146,23 @@ def get_detailed_season_flags(dates):
     is_post = np.zeros(len(dates), dtype=bool)
 
     for pre_start, reg_start, post_start, sb_end in SCHEDULE_RANGES:
-        is_pre |= ((date_objs >= pre_start) & (date_objs < reg_start)).values
-        is_reg |= ((date_objs >= reg_start) & (date_objs < post_start)).values
-        is_post |= ((date_objs >= post_start) & (date_objs <= sb_end)).values
+        is_pre |= ((date_objs >= pre_start) & (date_objs < reg_start)).to_numpy()
+        is_reg |= ((date_objs >= reg_start) & (date_objs < post_start)).to_numpy()
+        is_post |= ((date_objs >= post_start) & (date_objs <= sb_end)).to_numpy()
 
     # Handle future fallback beyond schedule range
     max_scheduled_date = SCHEDULE_RANGES[-1][3]  # e.g., 2028-02-13
-    mask_future = (date_objs > max_scheduled_date).values
+    mask_future = (date_objs > max_scheduled_date).to_numpy()
 
     if np.any(mask_future):
-        months = date_series.dt.month.values
-        is_pre[mask_future] = months[mask_future] == 8
-        is_reg[mask_future] = (months[mask_future] >= 9) & (months[mask_future] <= 12)
-        is_post[mask_future] = (months[mask_future] >= 1) & (months[mask_future] <= 2)
+        months = date_series.dt.month.to_numpy()
+        is_pre[mask_future] = months[mask_future] == AUGUST
+        is_reg[mask_future] = (months[mask_future] >= SEPTEMBER) & (
+            months[mask_future] <= DECEMBER
+        )
+        is_post[mask_future] = (months[mask_future] >= JANUARY) & (
+            months[mask_future] <= FEBRUARY
+        )
 
     return is_pre, is_reg, is_post
 
@@ -189,7 +206,8 @@ with st.sidebar:
     if validation_mode:
         periods = st.slider("Validation Days (withheld)", 30, 3 * 365, 365)
         st.info(
-            f"Training on data until {df_raw['ds'].iloc[-periods - 1].strftime('%Y-%m-%d')}.",
+            "Training on data until "
+            f"{df_raw['ds'].iloc[-periods - 1].strftime('%Y-%m-%d')}.",
         )
     else:
         periods = st.slider("Days to Forecast (Future)", 1, 5 * 365, 730)
@@ -231,7 +249,8 @@ with st.sidebar:
             use_different_post_offset = st.checkbox(
                 "Different Postseason Offset",
                 value=False,
-                help="Tune the postseason regressor offset level separate from regular season.",
+                help="Tune the postseason regressor offset level "
+                "separate from regular season.",
             )
             if use_different_post_offset:
                 post_offset_mult = st.slider(
@@ -240,7 +259,8 @@ with st.sidebar:
                     max_value=2.0,
                     value=1.0,
                     step=0.1,
-                    help="Offset strength multiplier during postseason (relative to standard regular season offset).",
+                    help="Offset strength multiplier during postseason "
+                    "(relative to standard regular season offset).",
                 )
 
             use_pre_offset = st.checkbox(
@@ -255,7 +275,8 @@ with st.sidebar:
                     max_value=1.0,
                     value=0.1,
                     step=0.05,
-                    help="Offset strength multiplier during preseason (relative to standard regular season offset).",
+                    help="Offset strength multiplier during preseason "
+                    "(relative to standard regular season offset).",
                 )
 
     use_conditional = st.checkbox(
@@ -274,12 +295,12 @@ with st.sidebar:
             use_pre_conditional = st.checkbox(
                 "Include Preseason Weekly",
                 value=False,
-                help="Adds a third weekly pattern specifically for the Preseason (August).",
+                help="Adds a third weekly pattern for the Preseason (August).",
             )
             use_post_conditional = st.checkbox(
                 "Include Postseason Weekly",
                 value=False,
-                help="Adds a separate fourth weekly pattern specifically for the Postseason (January-February).",
+                help="Adds a fourth weekly pattern for the Postseason (Jan-Feb).",
             )
 
     st.markdown("---")
@@ -289,7 +310,7 @@ with st.sidebar:
     add_country_holidays = st.checkbox(
         "Enable Inbuilt Bank Holidays",
         value=False,
-        help="Model country-specific calendar events automatically using Prophet's library.",
+        help="Model country-specific calendar events automatically.",
     )
     country_code = "US"
     if add_country_holidays:
@@ -352,7 +373,7 @@ with st.sidebar:
     else:
         regressor_prior = 10.0
 
-    # Holidays/Events Prior Scale (Visible if any Custom or Bank Holiday option is active)
+    # Holidays/Events Prior Scale (if any custom/bank holiday is active)
     if add_country_holidays or include_draft or include_superbowl:
         holiday_prior = st.slider("Holidays/Events Prior Scale", 0.01, 100.0, 10.0)
     else:
@@ -397,8 +418,10 @@ with st.sidebar:
         st.caption("✨ Floor is strictly set to 0.0 in Logistic mode.")
     else:
         st.caption(
-            "⚠️ Linear mode allows values to drop below zero if seasonal pressure is high.",
+            "⚠️ Linear mode allows values to drop below zero if seasonal pressure is "
+            "high.",
         )
+
 
 @st.cache_resource(max_entries=1)
 def run_prophet_engine(
@@ -441,7 +464,7 @@ def run_prophet_engine(
         train_df["cap"] = cap
         train_df["floor"] = 0.0
 
-    # Dynamically build nfl_season_regressor based on postseason and preseason multipliers
+    # Dynamically build nfl_season_regressor
     p_mult = pre_mult if use_pre_off else 0.0
     po_mult = post_mult if use_diff_post else 1.0
 
@@ -501,7 +524,7 @@ def run_prophet_engine(
 
     if include_weekly:
         if conditional_weekly:
-            # If postseason has its own pattern, regular on_season seasonality applies only to reg_season dates
+            # If postseason has its own pattern, `on_season` applies to `reg_season`
             on_season_cond = "reg_season" if use_post_cond else "on_season"
 
             m.add_seasonality(
@@ -580,20 +603,23 @@ def run_prophet_engine(
 
     reg_coef = 0.0
     if use_reg:
-        try:
-            from prophet.utilities import regressor_coefficients
+        from prophet.utilities import regressor_coefficients  # noqa: PLC0415
 
+        try:
             coeffs = regressor_coefficients(m)
             reg_coef = coeffs[coeffs["regressor"] == "nfl_season_regressor"][
                 "coef"
             ].to_numpy()[0]
-        except:
+        except ImportError:
             pass
 
     # Safely retrieve list of trained holidays (custom + country)
     try:
-        train_holidays = list(m.train_holiday_names)
-    except:
+        if m.train_holiday_names is not None:
+            train_holidays = list(m.train_holiday_names)
+        else:
+            train_holidays = []
+    except AttributeError:
         train_holidays = []
 
     del m
@@ -638,7 +664,7 @@ with st.session_state.model_lock:
         cap_val,
     )
 
-# Extract individual bank holiday effects dynamically for robust tooltip descriptions
+# Extract individual bank holiday effects dynamically
 bank_holiday_columns = [
     h for h in trained_holidays if h not in ["superbowl", "nfl_draft"]
 ]
@@ -647,7 +673,9 @@ bank_holiday_data = []
 if bank_holiday_columns:
     cols_present = [col for col in bank_holiday_columns if col in forecast.columns]
     for col in cols_present:
-        holiday_rows = forecast[forecast[col].abs() > 0.001][["ds", col]].copy()
+        holiday_rows = forecast[forecast[col].abs() > HOLIDAY_EFFECT_THRESHOLD][
+            ["ds", col]
+        ].copy()
         if not holiday_rows.empty:
             holiday_rows = holiday_rows.rename(columns={col: "effect"})
             holiday_rows["holiday_name"] = col
@@ -680,8 +708,8 @@ if validation_mode:
         ],
     )
 
-    y_true = historical_test["y"].values
-    y_pred = forecast_window["yhat"].values
+    y_true = historical_test["y"].to_numpy()
+    y_pred = forecast_window["yhat"].to_numpy()
     mae = mean_absolute_error(y_true, y_pred)
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
 
@@ -697,8 +725,8 @@ else:
         ],
     )
 
-# Enrich plot_df with predictions and metadata to enable rich tooltips directly on all lines/dots
-plot_df = pd.merge(plot_df, forecast[["ds", "yhat"]], on="ds", how="left")
+# Enrich plot_df for rich tooltips
+plot_df = plot_df.merge(forecast[["ds", "yhat"]], on="ds", how="left")
 plot_df = plot_df.rename(columns={"yhat": "Predicted"})
 plot_df["Actual"] = np.where(
     plot_df["Type"].isin(["Actual", "Actual (Training)", "Actual (Ground Truth)"]),
@@ -717,7 +745,7 @@ elif view_mode == "Last 3 Years":
     filter_start = df_raw["ds"].max() - pd.DateOffset(years=3)
     plot_df = plot_df[plot_df["ds"] >= filter_start]
     forecast_display = forecast[forecast["ds"] >= filter_start]
-elif view_mode == "Custom Range" and len(date_range) == 2:
+elif view_mode == "Custom Range" and len(date_range) == CUSTOM_RANGE_DATE_COUNT:
     plot_df = plot_df[
         (plot_df["ds"] >= pd.to_datetime(date_range[0]))
         & (plot_df["ds"] <= pd.to_datetime(date_range[1]))
@@ -737,23 +765,31 @@ m1, m2, m3 = st.columns(3)
 if validation_mode:
     with m1:
         st.markdown(
-            f'<div class="metric-card"><div class="metric-label">Mean Absolute Error (MAE)</div><div class="metric-value">{mae:.2f}</div></div>',
+            '<div class="metric-card"><div class="metric-label">'
+            'Mean Absolute Error (MAE)</div><div class="metric-value">'
+            f"{mae:.2f}</div></div>",
             unsafe_allow_html=True,
         )
     with m2:
         st.markdown(
-            f'<div class="metric-card"><div class="metric-label">Root Mean Sq. Error (RMSE)</div><div class="metric-value">{rmse:.2f}</div></div>',
+            '<div class="metric-card"><div class="metric-label">'
+            'Root Mean Sq. Error (RMSE)</div><div class="metric-value">'
+            f"{rmse:.2f}</div></div>",
             unsafe_allow_html=True,
         )
     with m3:
         st.markdown(
-            f'<div class="metric-card"><div class="metric-label">Validation Period</div><div class="metric-value">{periods} days</div></div>',
+            '<div class="metric-card"><div class="metric-label">'
+            'Validation Period</div><div class="metric-value">'
+            f"{periods} days</div></div>",
             unsafe_allow_html=True,
         )
 else:
     with m1:
         st.markdown(
-            f'<div class="metric-card"><div class="metric-label">Predicted Peak Interest</div><div class="metric-value">{forecast["yhat"].max():.1f}</div></div>',
+            '<div class="metric-card"><div class="metric-label">'
+            'Predicted Peak Interest</div><div class="metric-value">'
+            f'{forecast["yhat"].max():.1f}</div></div>',
             unsafe_allow_html=True,
         )
     with m2:
@@ -767,7 +803,8 @@ else:
             growth_pct = (forecast["trend"].iloc[-1] / forecast["trend"].iloc[0]) - 1
             growth_val = f"{growth_pct:+.1%}"
         st.markdown(
-            f'<div class="metric-card"><div class="metric-label">{growth_label}</div><div class="metric-value">{growth_val}</div></div>',
+            f'<div class="metric-card"><div class="metric-label">{growth_label}</div>'
+            f'<div class="metric-value">{growth_val}</div></div>',
             unsafe_allow_html=True,
         )
     with m3:
@@ -782,7 +819,9 @@ else:
             else f"+{reg_impact:.1f}"
         )
         st.markdown(
-            f'<div class="metric-card"><div class="metric-label">{reg_label}</div><div class="metric-value">{reg_val if use_regressor else "N/A"}</div></div>',
+            f'<div class="metric-card"><div class="metric-label">{reg_label}</div>'
+            f'<div class="metric-value">{reg_val if use_regressor else "N/A"}'
+            "</div></div>",
             unsafe_allow_html=True,
         )
 
@@ -828,7 +867,7 @@ band = (
     )
 )
 
-# 2. Base Chart Encoding with integrated default tooltips for direct hover on visual line coordinates
+# 2. Base Chart Encoding with integrated default tooltips for direct hover
 base = alt.Chart(plot_df).encode(
     x=alt.X("ds:T", title="Date"),
     y=alt.Y("y:Q", title="Interest Score", scale=y_axis_scale),
@@ -859,8 +898,7 @@ prediction_line = base.transform_filter(
     (alt.datum.Type == "Forecast") | (alt.datum.Type == "Validation Prediction"),
 ).mark_line(strokeDash=[5, 5])
 
-# Combined chart layer without transparent selector overlays, lines, rules or points
-# This completely removes the selection-fading / gray dimming layer artifact
+# Combined chart layer without transparent selector overlays
 final_chart = (
     alt.layer(
         band,
@@ -1008,7 +1046,7 @@ with comp_week:
         if use_conditional:
             all_week_data = []
 
-            # 1. Regular Season (or standard "In-Season" if postseason conditional is inactive)
+            # 1. Regular Season (or "In-Season" if postseason conditional is off)
             on_data = forecast[["ds", "weekly_on_season"]].copy()
             on_data["Day"] = on_data["ds"].dt.day_name().map(days_map)
             on_summary = on_data.groupby("Day")["weekly_on_season"].mean().reset_index()
@@ -1058,7 +1096,7 @@ with comp_week:
 
             week_summary = pd.concat(all_week_data)
 
-            # Determine dynamically active phases & color sequences to show only active components in the legend
+            # Determine dynamically active phases & color sequences for the legend
             active_phases = ["Regular Season" if use_post_conditional else "In-Season"]
             phase_colors = ["#fbbf24"]
             if use_pre_conditional and "weekly_pre_season" in forecast.columns:
@@ -1190,7 +1228,10 @@ if active_views:
             if valid_sb_dates:
                 target_sb_dt = pd.to_datetime(valid_sb_dates[0])
                 sb_roman = SB_ROMANS.get(target_sb_dt.year, "")
-                sb_title_text = f"Days relative to Super Bowl {sb_roman} ({target_sb_dt.strftime('%b %d, %Y')})"
+                sb_title_text = (
+                    f"Days relative to Super Bowl {sb_roman} "
+                    f"({target_sb_dt.strftime('%b %d, %Y')})"
+                )
 
                 st.markdown(f"*{sb_title_text}*")
 
@@ -1245,8 +1286,8 @@ if active_views:
                 st.altair_chart(combined_sb_chart, width="stretch")
             else:
                 st.info(
-                    f"No Super Bowl falls within the current {window_name} ({periods} days). "
-                    f"Increase the period slider to reach February.",
+                    f"No Super Bowl falls within the current {window_name} "
+                    f"({periods} days). Increase the period slider to reach February.",
                 )
         col_idx += 1
 
@@ -1271,7 +1312,10 @@ if active_views:
 
             if valid_draft_dates:
                 target_draft_dt = pd.to_datetime(valid_draft_dates[0])
-                draft_title_text = f"Days relative to NFL Draft ({target_draft_dt.strftime('%b %d, %Y')})"
+                draft_title_text = (
+                    f"Days relative to NFL Draft "
+                    f"({target_draft_dt.strftime('%b %d, %Y')})"
+                )
 
                 st.markdown(f"*{draft_title_text}*")
 
@@ -1328,8 +1372,9 @@ if active_views:
                 st.altair_chart(combined_draft_chart, width="stretch")
             else:
                 st.info(
-                    f"No NFL Draft falls within the current {window_name} ({periods} days). "
-                    f"Increase the period slider to reach late April/May.",
+                    f"No NFL Draft falls within the current {window_name} "
+                    f"({periods} days). Increase the period slider to reach "
+                    "late April/May.",
                 )
         col_idx += 1
 
@@ -1346,7 +1391,9 @@ if active_views:
 
             if not bank_sample.empty:
                 st.markdown(
-                    f"*Showing last full year: {last_year_limit.strftime('%b %Y')} to {forecast['ds'].max().strftime('%b %Y')}*",
+                    f"*Showing last full year: "
+                    f"{last_year_limit.strftime('%b %Y')} to "
+                    f"{forecast['ds'].max().strftime('%b %Y')}*",
                 )
 
                 bank_chart = (
@@ -1371,7 +1418,7 @@ if active_views:
                 st.altair_chart(bank_chart, width="stretch")
             else:
                 st.info(
-                    "No active bank holidays found inside the final year of the horizon.",
+                    "No active bank holidays found in the final year of the horizon.",
                 )
         col_idx += 1
 
@@ -1387,29 +1434,29 @@ with st.expander("💻 View Generated Python Code for Prophet Model"):
         "from prophet import Prophet",
         "",
         "# --- Training DataFrame Schema Example ---",
-        "# Your df_train DataFrame must be formatted with the following columns & data types:",
+        "# df_train must be formatted with these columns & data types:",
         "#",
-        "# Column Name           | DataType       | Description",
-        "# ----------------------|----------------|----------------------------------------------",
-        "# ds                    | datetime64[ns] | Complete timestamp series (e.g., '2023-09-07')",
-        "# y                     | float64        | Search/Trend metric value",
-        "# nfl_season_regressor  | float64        | Extra regressor value",
-        "# on_season             | bool           | True if regular or postseason is active, else False",
-        "# reg_season            | bool           | True if regular season is active, else False",
-        "# post_season           | bool           | True if postseason is active, else False",
-        "# pre_season            | bool           | True if preseason is active, else False",
-        "# off_season            | bool           | True if off-season is active, else False",
+        "# Column Name | DataType | Description",
+        "# ----------------------|----------------|--------------------------",
+        "# ds | datetime64[ns] | Complete timestamp series (e.g., '2023-09-07')",
+        "# y | float64 | Search/Trend metric value",
+        "# nfl_season_regressor | float64 | Extra regressor value",
+        "# on_season | bool | True if regular or postseason is active",
+        "# reg_season | bool | True if regular season is active",
+        "# post_season | bool | True if postseason is active",
+        "# pre_season | bool | True if preseason is active",
+        "# off_season | bool | True if off-season is active",
         "",
         "# Example of dummy DataFrame creation:",
         "df_train = pd.DataFrame({",
-        "    'ds': pd.to_datetime(['2023-05-15', '2023-08-10', '2023-09-15', '2024-01-20']),",
-        "    'y': [12.4, 38.2, 95.1, 88.3],",
-        "    'nfl_season_regressor': [0.0, 0.0, 1.0, 1.0],",
-        "    'on_season': [False, False, True, True],",
-        "    'reg_season': [False, False, True, False],",
-        "    'post_season': [False, False, False, True],",
-        "    'pre_season': [False, True, False, False],",
-        "    'off_season': [True, False, False, False]",
+        "    'ds': pd.to_datetime(['2023-05-15', '2023-08-10', '2023-09-15']),",
+        "    'y': [12.4, 38.2, 95.1],",
+        "    'nfl_season_regressor': [0.0, 0.0, 1.0],",
+        "    'on_season': [False, False, True],",
+        "    'reg_season': [False, False, True],",
+        "    'post_season': [False, False, False],",
+        "    'pre_season': [False, True, False],",
+        "    'off_season': [True, False, False]",
         "})",
         "",
         "# 1. Define custom holiday matrices",
@@ -1483,13 +1530,15 @@ with st.expander("💻 View Generated Python Code for Prophet Model"):
 
     if use_regressor:
         code_lines.append(
-            f"m.add_regressor('nfl_season_regressor', mode='{season_mode}', prior_scale={regressor_prior})",
+            f"m.add_regressor('nfl_season_regressor', mode='{season_mode}', "
+            f"prior_scale={regressor_prior})",
         )
         if use_different_post_offset or use_pre_offset:
             post_val = post_offset_mult if use_different_post_offset else 1.0
             pre_val = pre_offset_mult if use_pre_offset else 0.0
             code_lines.append(
-                f"# Custom regressor offsets: Preseason={pre_val}, Regular Season=1.0, Postseason={post_val}\n"
+                f"# Custom regressor offsets: Preseason={pre_val}, "
+                f"Regular Season=1.0, Postseason={post_val}\n"
                 f"df_train['nfl_season_regressor'] = np.where(\n"
                 f"    df_train['reg_season'], 1.0,\n"
                 f"    np.where(\n"
@@ -1501,29 +1550,39 @@ with st.expander("💻 View Generated Python Code for Prophet Model"):
 
     if include_yearly:
         code_lines.append(
-            f"m.add_seasonality(name='yearly', period=365.25, fourier_order={fourier_order_year}, prior_scale={season_prior})",
+            f"m.add_seasonality(name='yearly', period=365.25, "
+            f"fourier_order={fourier_order_year}, prior_scale={season_prior})",
         )
 
     if include_weekly:
         if use_conditional:
             reg_season_cond = "reg_season" if use_post_conditional else "on_season"
             code_lines.append(
-                f"m.add_seasonality(name='weekly_on_season', period=7, fourier_order={fourier_order_week}, prior_scale={season_prior}, condition_name='{reg_season_cond}')",
+                f"m.add_seasonality(name='weekly_on_season', period=7, "
+                f"fourier_order={fourier_order_week}, prior_scale={season_prior}, "
+                f"condition_name='{reg_season_cond}')",
             )
             if use_pre_conditional:
                 code_lines.append(
-                    f"m.add_seasonality(name='weekly_pre_season', period=7, fourier_order={fourier_order_week}, prior_scale={season_prior}, condition_name='pre_season')",
+                    f"m.add_seasonality(name='weekly_pre_season', period=7, "
+                    f"fourier_order={fourier_order_week}, prior_scale={season_prior}, "
+                    f"condition_name='pre_season')",
                 )
             if use_post_conditional:
                 code_lines.append(
-                    f"m.add_seasonality(name='weekly_post_season', period=7, fourier_order={fourier_order_week}, prior_scale={season_prior}, condition_name='post_season')",
+                    f"m.add_seasonality(name='weekly_post_season', period=7, "
+                    f"fourier_order={fourier_order_week}, prior_scale={season_prior}, "
+                    f"condition_name='post_season')",
                 )
             code_lines.append(
-                f"m.add_seasonality(name='weekly_off_season', period=7, fourier_order=3, prior_scale={season_prior}, condition_name='off_season')",
+                f"m.add_seasonality(name='weekly_off_season', period=7, "
+                f"fourier_order=3, prior_scale={season_prior}, "
+                f"condition_name='off_season')",
             )
         else:
             code_lines.append(
-                f"m.add_seasonality(name='weekly', period=7, fourier_order={fourier_order_week}, prior_scale={season_prior})",
+                f"m.add_seasonality(name='weekly', period=7, "
+                f"fourier_order={fourier_order_week}, prior_scale={season_prior})",
             )
 
     code_lines.extend(

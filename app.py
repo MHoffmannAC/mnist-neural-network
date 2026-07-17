@@ -66,7 +66,7 @@ def main() -> None:
                     icon=":material/query_stats:",
                 ),
                 st.Page(
-                    "pages/ts-prophet.py",
+                    "pages/ts_prophet.py",
                     title="Prophet",
                     icon=":material/auto_awesome:",
                 ),

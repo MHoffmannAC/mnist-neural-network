@@ -6,9 +6,21 @@ def main() -> None:
     st.set_option("client.showErrorDetails", value=False)
 
     with st.sidebar:
-        st.page_link("https://nfl-gameday.streamlit.app/", label="NFL Gameday Analyzer", icon=":material/sports_football:")
-        st.page_link("https://nfl-ds-challenges.streamlit.app/", label="NFL DataScience Challenges", icon=":material/sports_football:")
-        st.page_link("https://machine-learning-playgrounds.streamlit.app/", label="Other ML Playgrounds", icon=":material/person_play:")
+        st.page_link(
+            "https://nfl-gameday.streamlit.app/",
+            label="NFL Gameday Analyzer",
+            icon=":material/sports_football:",
+        )
+        st.page_link(
+            "https://nfl-ds-challenges.streamlit.app/",
+            label="NFL DataScience Challenges",
+            icon=":material/sports_football:",
+        )
+        st.page_link(
+            "https://machine-learning-playgrounds.streamlit.app/",
+            label="Other ML Playgrounds",
+            icon=":material/person_play:",
+        )
 
     page = st.navigation(
         [
@@ -24,7 +36,7 @@ def main() -> None:
                 icon=":material/description:",
             ),
             st.Page(
-                "pages/ts-prophet.py",
+                "pages/ts_prophet.py",
                 title="Prophet",
                 icon=":material/auto_awesome:",
             ),
