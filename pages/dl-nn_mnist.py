@@ -175,7 +175,7 @@ def array_to_base64(arr, cmap_name="viridis", symmetric=False):
     max_val = np.max(np.abs(arr))
     if max_val < 1e-15:
         # Return a slightly transparent dark square to match the theme
-        img = Image.new('RGB', (84, 84), (15, 23, 42)) 
+        img = Image.new("RGB", (84, 84), (15, 23, 42))
     else:
         if symmetric:
             abs_arr = np.abs(arr)
@@ -211,16 +211,16 @@ def compute_all_saliencies(model, test_input):
         layer_sals = []
         # FIX: Use .units instead of .output_shape[1] to avoid AttributeError
         num_nodes = model.layers[l_idx].units
-        
+
         for n_idx in range(num_nodes):
             # Get the "template" of what this neuron is looking for
             template = get_effective_receptive_field(model, l_idx, n_idx)
-            
+
             # The "Feature Map" is the input image masked by the template
             # This shows exactly which drawn pixels are contributing to the activation
             feature_map = input_img * template
             layer_sals.append(feature_map)
-            
+
         saliencies.append(layer_sals)
 
     return saliencies
@@ -267,11 +267,13 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
             if not st.session_state.is_training:
                 rf_b64 = get_rf_base64(model, l_idx + 1, i) if model else ""
                 sal_b64 = (
-                    array_to_base64(saliencies[l_idx + 1][i], cmap_name="viridis", symmetric=False)
+                    array_to_base64(
+                        saliencies[l_idx + 1][i], cmap_name="viridis", symmetric=False,
+                    )
                     if saliencies and len(saliencies) > l_idx + 1
                     else ""
                 )
-            
+
             nodes.append(
                 {
                     "id": f"h_{l_idx}_{i}",
@@ -366,11 +368,12 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
                 if node_b[3] == "dots":
                     continue
                 norm_dst = float(np.clip(node_b[2] / max_dst, 0, 1))
-                
+
                 # OPTIMIZATION: Only draw significant connections during training to save SVG bandwidth
                 if st.session_state.is_training:
-                    if norm_dst < 0.2: continue 
-                
+                    if norm_dst < 0.2:
+                        continue
+
                 min_opacity = 0.15
                 opacity = (
                     min(
@@ -442,9 +445,9 @@ def draw_network_svg(layers_config, activations=None, model=None, saliencies=Non
 
                 # Vertical placement
                 dy = -42
-                if y < 110:  
+                if y < 110:
                     dy = 40
-                elif y > height - 110:  
+                elif y > height - 110:
                     dy = -75
 
                 act_text = f"Act: {val:.3f}" if activations is not None else "Act: --"
@@ -773,9 +776,9 @@ if st.session_state.is_training:
     if st.session_state.current_epoch < epochs:
         run_n = min(update_freq, epochs - st.session_state.current_epoch)
         target = st.session_state.current_epoch + run_n
-        
+
         # Optimization: Explicitly force CPU for these tiny operations to avoid MPS overhead
-        with tf.device('/CPU:0'):
+        with tf.device("/CPU:0"):
             hist = st.session_state.model.fit(
                 x_train,
                 y_train,
@@ -785,14 +788,14 @@ if st.session_state.is_training:
                 batch_size=128,
                 verbose=0,
             )
-        
+
         st.session_state.current_epoch = target
         st.session_state.history["loss"].extend(hist.history["loss"])
         st.session_state.history["acc"].extend(hist.history["accuracy"])
         st.session_state.history["val_acc"].extend(hist.history["val_accuracy"])
-        
+
         # Increase sleep slightly to prevent browser-side render congestion on M4
-        time.sleep(0.05) 
+        time.sleep(0.05)
         st.rerun()
     else:
         st.session_state.is_training = False

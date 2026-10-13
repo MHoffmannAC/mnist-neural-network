@@ -222,7 +222,13 @@ def run_baseline_engine(data, m_type, steps, is_validation, m_val, k_val, t_type
 
 # Run engine
 forecast_vals, actual_vals = run_baseline_engine(
-    df_processed, model_type, periods, validation_mode, seasonal_m, recent_k, trend_type,
+    df_processed,
+    model_type,
+    periods,
+    validation_mode,
+    seasonal_m,
+    recent_k,
+    trend_type,
 )
 
 # --- Data Preparation for Visualization ---

@@ -647,7 +647,8 @@ with col_sum:
 # --- NEW EXTENSIVE EDUCATIONAL SECTION ---
 st.markdown("---")
 with st.expander(
-    "📚 Deep Dive: Understanding the Classical Time Series Engine", expanded=False,
+    "📚 Deep Dive: Understanding the Classical Time Series Engine",
+    expanded=False,
 ):
     st.write(f"### Current Selection: **{model_type}**")
 

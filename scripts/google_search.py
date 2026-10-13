@@ -22,7 +22,7 @@ def fetch_10_year_daily_data(keyword, start_year, end_year, geo="US"):
             stop_mon=12,
             geo=geo,
             verbose=True,
-            wait_time=60.0, # Increase this if you get 429 (Too Many Requests) errors
+            wait_time=300.0, # Increase this if you get 429 (Too Many Requests) errors
         )
 
         # The resulting dataframe contains:
